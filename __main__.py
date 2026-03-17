@@ -2,8 +2,11 @@
 """Entry point for mados-wallpaper."""
 
 import sys
+import os
 
-from .app import WallpaperApp
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from app import WallpaperApp
 
 
 def main() -> int:

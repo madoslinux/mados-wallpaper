@@ -1,13 +1,13 @@
 # madOS Wallpaper
 
-A lightweight GTK3-based wallpaper manager for Wayland compositors (Sway/Hyprland).
+A GTK3-based wallpaper manager for madOS that manages per-workspace wallpapers using SQLite.
 
 ## Features
 
-- Browse wallpapers from standard directories
-- Preview wallpapers with thumbnails
-- Set wallpaper with one click
-- Detects Sway or Hyprland compositor automatically
+- Manage wallpapers for 6 workspaces
+- Reads/writes to SQLite database (`~/.local/share/mados/wallpapers.db`)
+- Wallpapers are assigned randomly on first run
+- Persists assignments across reboots
 - Nord theme with consistent color palette
 
 ## Requirements
@@ -15,7 +15,7 @@ A lightweight GTK3-based wallpaper manager for Wayland compositors (Sway/Hyprlan
 - Python 3.x
 - GTK3 (`gir1.2-gtk-3.0`)
 - GdkPixbuf (`gir1.2-gdkpixbuf-2.0`)
-- Sway or Hyprland compositor
+- sqlite3
 
 ## Installation
 
@@ -27,14 +27,25 @@ cd mados-wallpaper
 ## Running
 
 ```bash
-python3 -m mados_wallpaper
+python3 __main__.py
 ```
 
-## Usage
+## Database
 
-1. The application scans standard directories for images (`~/Imágenes`, `~/Pictures`, `/usr/share/backgrounds`)
-2. Click on a wallpaper to select it
-3. Click "Apply Wallpaper" to set it
+The app uses a SQLite database at `~/.local/share/mados/wallpapers.db`:
+
+- **wallpapers**: id, path
+- **assignments**: workspace (1-6), wallpaper_id
+
+This is the same database used by `mados-sway-wallpapers` and `mados-wallpaper-glitch`.
+
+## Configuration
+
+Default wallpaper directories:
+- `~/Imágenes`
+- `~/Pictures`
+- `/usr/share/backgrounds`
+- `/usr/share/wayland-backgrounds`
 
 ## Architecture
 
@@ -43,33 +54,12 @@ python3 -m mados_wallpaper
 The main application class that:
 - Creates and manages the GTK window
 - Builds the wallpaper grid UI
-- Handles user interactions
-
-### wallpaper_scanner.py
-
-Handles wallpaper scanning and compositor integration:
-- `scan_wallpaper_dirs()` - Scans directories for image files
-- `set_sway_wallpaper()` - Sets wallpaper on Sway
-- `set_hyprland_wallpaper()` - Sets wallpaper on Hyprland
-- `detect_compositor()` - Detects the running compositor
+- Handles user interactions (select workspace, assign wallpaper)
 
 ### config.py
 
 Configuration constants:
 - Colors (Nord palette)
-- Default wallpaper directories
+- Database path
+- Wallpaper directories
 - Window dimensions
-
-## Configuration
-
-Wallpaper directories can be customized via environment variable:
-
-```bash
-WALLPAPER_DIRS="/path/to/wallpapers:/another/path" python3 -m mados_wallpaper
-```
-
-## State Persistence
-
-State is saved to `~/.config/mados-wallpaper/state.json`:
-- Last selected wallpaper
-- Detected compositor

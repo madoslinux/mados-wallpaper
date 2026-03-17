@@ -1,6 +1,6 @@
 """CSS theme for mados-wallpaper using Nord palette."""
 
-from .config import NORD
+from config import NORD
 
 
 def get_css() -> str:
@@ -23,63 +23,65 @@ def get_css() -> str:
             background-color: {bg_light};
             padding: 12px;
             font-weight: bold;
-            font-size: 14px;
+            font-size: 16px;
+            color: {fg_light};
         }}
 
-        .wallpaper-grid {{
-            padding: 8px;
+        .subheader {{
+            color: {fg};
+            font-size: 12px;
+            opacity: 0.7;
         }}
 
-        .wallpaper-item {{
-            background-color: {bg_light};
+        .workspace-label {{
+            color: {accent};
+            font-size: 12px;
+        }}
+
+        .wallpaper-thumb {{
             border-radius: 6px;
-            padding: 4px;
-            margin: 4px;
-        }}
-
-        .wallpaper-item:hover {{
-            background-color: {hover};
-        }}
-
-        .wallpaper-item.selected {{
-            border: 2px solid {accent};
-        }}
-
-        .wallpaper-image {{
-            border-radius: 4px;
             background-color: {bg};
         }}
 
-        .wallpaper-name {{
-            padding: 4px;
-            text-align: center;
+        .wallpaper-filename {{
+            color: {fg_light};
+            font-size: 10px;
         }}
 
-        .btn {{
-            background-color: {accent};
-            color: {bg};
-            border: none;
-            border-radius: 4px;
-            padding: 8px 16px;
-            font-weight: bold;
+        GtkGrid {{
+            background-color: {bg};
         }}
 
-        .btn:hover {{
+        GtkEventBox {{
+            background-color: {bg_light};
+            border-radius: 8px;
+        }}
+
+        GtkEventBox:hover {{
             background-color: {hover};
         }}
 
-        .btn-box {{
-            padding: 8px;
+        button {{
+            background-color: {accent};
+            color: {bg};
+            border: none;
+            border-radius: 6px;
+            padding: 10px 16px;
+            font-weight: bold;
+        }}
+
+        button:hover {{
+            background-color: {hover};
         }}
 
         scrollbar {{
             background-color: {bg};
-            min-width: 8px;
+            min-width: 10px;
         }}
 
         scrollbar slider {{
             background-color: {bg_light};
-            border-radius: 4px;
+            border-radius: 5px;
         }}
 
         scrollbar slider:hover {{

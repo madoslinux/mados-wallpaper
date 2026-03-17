@@ -2,6 +2,8 @@
 
 import os
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 NORD = {
     "polar_night": {
         "darkest": "#2e3440",
@@ -31,6 +33,7 @@ NORD = {
 }
 
 WALLPAPER_DIRS = [
+    os.path.join(SCRIPT_DIR, "wallpapers"),
     os.path.expanduser("~/Imágenes"),
     os.path.expanduser("~/Pictures"),
     "/usr/share/backgrounds",
@@ -40,6 +43,11 @@ WALLPAPER_DIRS = [
 CONFIG_DIR = os.path.expanduser("~/.config/mados-wallpaper")
 STATE_FILE = os.path.join(CONFIG_DIR, "state.json")
 
+DB_DIR = os.path.expanduser("~/.local/share/mados")
+DB_PATH = os.path.join(DB_DIR, "wallpapers.db")
+
+MAX_WORKSPACES = 6
+
 ICON_SIZE = 48
-WINDOW_WIDTH = 400
+WINDOW_WIDTH = 600
 WINDOW_HEIGHT = 500
