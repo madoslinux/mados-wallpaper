@@ -12,7 +12,7 @@ from gi.repository import Gtk, Gdk
 
 import __init__ as app_module
 from config import CONFIG_DIR, MAX_WORKSPACES, STATE_FILE, WINDOW_WIDTH
-from database import init_db, sync_wallpapers, get_all_wallpapers, get_assignments, assign_wallpaper, get_wallpaper_by_id
+from database import init_db, sync_wallpapers, get_all_wallpapers, get_assignments, assign_wallpaper, get_wallpaper_by_id, get_connection
 from theme import COLORS
 from workspace_card import WorkspaceCard
 
@@ -28,9 +28,17 @@ class WallpaperApp(Gtk.Application):
         self._load_state()
 
     def _on_activate(self, app):
+        from gi.repository import GLib
         self._build_ui()
-        self._load_data()
-        self.window.present()
+        
+        def load_and_show():
+            self._load_data()
+            if self.window:
+                self.window.show()
+                self.window.present()
+            return False
+        
+        GLib.idle_add(load_and_show)
 
     def _load_data(self):
         init_db()
@@ -44,58 +52,46 @@ class WallpaperApp(Gtk.Application):
         self._show_picker(workspace)
 
     def _show_picker(self, workspace: int):
-        dialog = Gtk.Window(title=f"Wallpaper for Workspace {workspace}")
-        dialog.set_default_size(550, 450)
-
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin=12)
-
-        mode_combo = Gtk.ComboBoxText()
-        for mode, desc in [("fill", "Fill"), ("fit", "Fit"), ("center", "Center"), ("stretch", "Stretch"), ("tile", "Tile")]:
-            mode_combo.append(mode, desc)
-        mode_combo.set_active_id("fill")
-        box.append(mode_combo)
-
-        scroll = Gtk.ScrolledWindow()
-        flowbox = Gtk.FlowBox()
-        flowbox.set_max_children_per_line(3)
-        flowbox.set_halign(Gtk.Align.CENTER)
-
         current_assignment = self._assignments.get(workspace, {})
         current_mode = current_assignment.get("mode", "fill")
+        
+        dialog = Gtk.FileDialog(title=f"Select Wallpaper for Workspace {workspace}")
+        
+        filter_images = Gtk.FileFilter()
+        filter_images.set_name("Images")
+        for ext in ["png", "jpg", "jpeg", "webp", "bmp", "gif"]:
+            filter_images.add_pattern(f"*.{ext}")
+        
+        from gi.repository import Gio
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(filter_images)
+        dialog.set_filters(filters)
+        
+        mode_combo = Gtk.ComboBoxText()
+        for mode, desc in [("fill", "Fill (cover)"), ("fit", "Fit"), ("center", "Center"), ("stretch", "Stretch"), ("tile", "Tile")]:
+            mode_combo.append(mode, desc)
         mode_combo.set_active_id(current_mode)
-
-        def on_item_click(wp):
-            mode = mode_combo.get_active_id()
-            assign_wallpaper(workspace, wp["id"], mode)
-            self._assignments[workspace] = {"wallpaper_id": wp["id"], "mode": mode}
-            self._populate_grid()
-            self._save_state()
-            dialog.destroy()
-
-        for wp in self._wallpapers:
-            item = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            item.set_size_request(140, 100)
-
+        
+        def on_response(dialog, result):
             try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(wp["path"], 130, 70, True)
-                pic = Gtk.Picture.new_for_pixbuf(pixbuf)
-            except Exception:
-                pic = Gtk.Image.new_from_icon_name("image-x-generic")
-
-            item.append(pic)
-            item.append(Gtk.Label(label=wp["filename"][:18]))
-
-            click = Gtk.GestureClick.new()
-            click.connect("pressed", lambda g, n, x, y, wp=wp: on_item_click(wp))
-            item.add_controller(click)
-
-            flowbox.append(item)
-
-        scroll.set_child(flowbox)
-        box.append(scroll)
-
-        dialog.set_child(box)
-        dialog.show()
+                file = dialog.open_finish(result)
+                if file:
+                    file_path = file.get_path()
+                    mode = mode_combo.get_active_id()
+                    
+                    conn = get_connection()
+                    conn.execute("INSERT OR IGNORE INTO wallpapers(path) VALUES(?)", (file_path,))
+                    wallpaper_id = conn.execute("SELECT id FROM wallpapers WHERE path = ?", (file_path,)).fetchone()[0]
+                    assign_wallpaper(workspace, wallpaper_id, mode)
+                    conn.close()
+                    
+                    self._load_data()
+                    self._save_state()
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+        
+        dialog.open(self.window, None, on_response)
 
     def _populate_grid(self):
         for child in self._grid:
@@ -128,10 +124,17 @@ class WallpaperApp(Gtk.Application):
             json.dump({"last_workspace": self._selected_workspace}, f)
 
     def _build_ui(self):
-        self.window = Gtk.ApplicationWindow(application=self, title=__app_name__)
-        self.window.set_default_size(WINDOW_WIDTH, 420)
+        self.window = Gtk.ApplicationWindow(application=self, title="")
+        self.window.set_default_size(580, 370)
+        self.window.set_resizable(False)
+        self.window.set_decorated(False)
+        self.window.set_titlebar(None)
+        self.window.set_css_classes(["main-window"])
 
         css = f"""
+            .main-window {{
+                border-radius: 20px;
+            }}
             window {{
                 background-color: {COLORS['bg_darkest']};
             }}
@@ -164,20 +167,13 @@ class WallpaperApp(Gtk.Application):
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
-        header = Gtk.Label(label=__app_name__)
-        header.set_markup(f"<span weight='bold' size='large'>{__app_name__}</span>")
-        header.set_halign(Gtk.Align.START)
-        header.set_margin_top(12)
-        header.set_margin_start(12)
-        vbox.append(header)
-
         self._grid = Gtk.Grid()
-        self._grid.set_column_spacing(12)
-        self._grid.set_row_spacing(16)
-        self._grid.set_margin_top(12)
-        self._grid.set_margin_bottom(12)
-        self._grid.set_margin_start(12)
-        self._grid.set_margin_end(12)
+        self._grid.set_column_spacing(20)
+        self._grid.set_row_spacing(20)
+        self._grid.set_margin_top(16)
+        self._grid.set_margin_bottom(16)
+        self._grid.set_margin_start(16)
+        self._grid.set_margin_end(16)
         vbox.append(self._grid)
 
         self.window.set_child(vbox)
