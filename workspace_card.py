@@ -1,6 +1,7 @@
 """Workspace card widget for mados-wallpaper."""
 
 import os
+import sys
 
 import gi
 
@@ -10,11 +11,12 @@ from gi.repository import Gtk, Gdk, GdkPixbuf
 
 
 class WorkspaceCard(Gtk.Box):
-    def __init__(self, workspace: int, wallpaper: dict | None, on_click=None):
+    def __init__(self, workspace: int, wallpaper: dict | None, on_click=None, on_mode_click=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.workspace = workspace
         self.wallpaper = wallpaper
         self.on_click = on_click
+        self.on_mode_click = on_mode_click
         self.set_css_classes(["workspace-card"])
         self.set_size_request(170, 150)
 
@@ -33,21 +35,37 @@ class WorkspaceCard(Gtk.Box):
             image.set_pixel_size(40)
 
         image.set_css_classes(["wallpaper-thumb"])
+        
+        image_click = Gtk.GestureClick.new()
+        image_click.connect("pressed", self._on_image_click_gesture)
+        image.add_controller(image_click)
+        
         self.append(image)
 
         filename = wallpaper["filename"] if wallpaper else "No wallpaper"
         name_label = Gtk.Label(label=filename[:20])
         name_label.set_css_classes(["wallpaper-name"])
         self.append(name_label)
+        
+        mode_text = f"Mode: {wallpaper.get('mode', 'fill')}" if wallpaper else ""
+        mode_btn = Gtk.Button(label=mode_text)
+        mode_btn.set_css_classes(["mode-button"])
+        mode_btn.set_size_request(100, 24)
+        
+        def on_mode_btn_clicked(_):
+            if self.on_mode_click:
+                self.on_mode_click(self.workspace, self.wallpaper)
+        
+        mode_btn.connect("clicked", on_mode_btn_clicked)
+        
+        self.append(mode_btn)
 
         event = Gtk.EventControllerMotion.new()
         event.connect("enter", self._on_enter)
         event.connect("leave", self._on_leave)
         self.add_controller(event)
 
-        click = Gtk.GestureClick.new()
-        click.connect("pressed", self._on_click_gesture)
-        self.add_controller(click)
+
 
     def _on_enter(self, controller, x, y):
         self.set_css_classes(["workspace-card", "hovered"])
@@ -55,6 +73,16 @@ class WorkspaceCard(Gtk.Box):
     def _on_leave(self, controller):
         self.set_css_classes(["workspace-card"])
 
-    def _on_click_gesture(self, gesture, n_press, x, y):
+    def _on_mode_enter(self, controller, x, y):
+        self.set_css_classes(["workspace-card", "mode-hovered"])
+    
+    def _on_mode_leave(self, controller):
+        self.set_css_classes(["workspace-card"])
+    
+    def _on_mode_click_gesture(self, gesture, n_press, x, y):
+        if self.on_mode_click:
+            self.on_mode_click(self.workspace, self.wallpaper)
+    
+    def _on_image_click_gesture(self, gesture, n_press, x, y):
         if self.on_click:
             self.on_click(self.workspace)

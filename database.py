@@ -6,17 +6,25 @@ from typing import Any
 
 from config import DB_PATH, WALLPAPER_DIRS
 
+_conn = None
+
 
 def get_connection() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    global _conn
+    if _conn is None:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        _conn = sqlite3.connect(DB_PATH, timeout=10.0, isolation_level="DEFERRED")
+        _conn.row_factory = sqlite3.Row
+        _conn.execute("PRAGMA journal_mode=WAL")
+    return _conn
 
 
 def init_db() -> None:
     conn = get_connection()
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.Error:
+        pass
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS wallpapers (
@@ -35,7 +43,6 @@ def init_db() -> None:
     """
     )
     conn.commit()
-    conn.close()
 
 
 def sync_wallpapers() -> None:
@@ -53,7 +60,6 @@ def sync_wallpapers() -> None:
                     except sqlite3.Error:
                         pass
     conn.commit()
-    conn.close()
 
 
 def get_all_wallpapers() -> list[dict[str, Any]]:
@@ -61,7 +67,6 @@ def get_all_wallpapers() -> list[dict[str, Any]]:
     wallpapers = []
     for row in conn.execute("SELECT id, path FROM wallpapers ORDER BY path"):
         wallpapers.append({"id": row["id"], "path": row["path"], "filename": os.path.basename(row["path"])})
-    conn.close()
     return wallpapers
 
 
@@ -70,7 +75,6 @@ def get_assignments() -> dict[int, dict[str, Any]]:
     assignments = {}
     for row in conn.execute("SELECT workspace, wallpaper_id, mode FROM assignments"):
         assignments[row["workspace"]] = {"wallpaper_id": row["wallpaper_id"], "mode": row["mode"]}
-    conn.close()
     return assignments
 
 
@@ -78,13 +82,11 @@ def assign_wallpaper(workspace: int, wallpaper_id: int, mode: str = "fill") -> N
     conn = get_connection()
     conn.execute("INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES(?, ?, ?)", (workspace, wallpaper_id, mode))
     conn.commit()
-    conn.close()
 
 
 def get_wallpaper_by_id(wallpaper_id: int) -> dict[str, Any] | None:
     conn = get_connection()
     row = conn.execute("SELECT id, path FROM wallpapers WHERE id = ?", (wallpaper_id,)).fetchone()
-    conn.close()
     if row:
         return {"id": row["id"], "path": row["path"], "filename": os.path.basename(row["path"])}
     return None
