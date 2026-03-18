@@ -174,7 +174,10 @@ class WallpaperApp(Gtk.Application):
         self._grid = Gtk.Grid()
         self._grid.set_column_spacing(12)
         self._grid.set_row_spacing(16)
-        self._grid.set_margin(12)
+        self._grid.set_margin_top(12)
+        self._grid.set_margin_bottom(12)
+        self._grid.set_margin_start(12)
+        self._grid.set_margin_end(12)
         vbox.append(self._grid)
 
         self.window.set_child(vbox)
