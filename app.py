@@ -185,7 +185,10 @@ class WallpaperApp(Gtk.Application):
 
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
-        if "sway" in desktop:
+        # Try daemon first, fallback to direct methods
+        if subprocess.run(["pgrep", "-f", "mados-wallpaperd"], capture_output=True).returncode == 0:
+            subprocess.run(["mados-wallpaperd", "set", str(workspace)], check=False)
+        elif "sway" in desktop:
             subprocess.run(["mados-sway-wallpaper-set", str(workspace)], check=False)
         elif "hyprland" in desktop:
             subprocess.run(["mados-hyprland-wallpaper-set", str(workspace)], check=False)
