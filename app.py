@@ -9,8 +9,8 @@ import threading
 
 import gi
 
-gi.require_version("Gtk", "4.0")
-gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
 
 import __init__ as app_module
@@ -201,29 +201,31 @@ class WallpaperApp(Gtk.Application):
         current_assignment = self._assignments.get(workspace, {})
         current_mode = current_assignment.get("mode", "fill")
 
-        dialog = Gtk.FileDialog(title=f"Select Wallpaper - Workspace {workspace}")
+        dialog = Gtk.FileChooserDialog(
+            title=f"Select Wallpaper - Workspace {workspace}",
+            parent=self.window,
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK
+        )
 
         filter_images = Gtk.FileFilter()
         filter_images.set_name("Images")
         for ext in ["png", "jpg", "jpeg", "webp", "bmp", "gif"]:
             filter_images.add_pattern(f"*.{ext}")
 
-        from gi.repository import Gio
+        dialog.add_filter(filter_images)
 
-        filters = Gio.ListStore.new(Gtk.FileFilter)
-        filters.append(filter_images)
-        dialog.set_filters(filters)
-
-        def on_response(source, result):
-            try:
-                file = dialog.open_finish(result)
-                if file:
-                    file_path = file.get_path()
+        def on_response(dialog, response):
+            if response == Gtk.ResponseType.OK:
+                file_path = dialog.get_filename()
+                if file_path:
                     self._show_mode_selector(workspace, file_path, current_mode)
-            except Exception:
-                pass
+            dialog.destroy()
 
-        dialog.open(self.window, None, on_response)
+        dialog.connect("response", on_response)
+        dialog.show()
 
     def _show_mode_selector(self, workspace: int, file_path: str, current_mode: str):
         mode_dialog = Gtk.Window(title="")
@@ -287,7 +289,7 @@ class WallpaperApp(Gtk.Application):
 
         mode_box.append(btn_box)
 
-        mode_dialog.set_child(mode_box)
+        mode_dialog.add(mode_box)
 
         key_controller = Gtk.EventControllerKey.new()
         key_controller.connect(
@@ -411,7 +413,7 @@ class WallpaperApp(Gtk.Application):
         self._grid.set_margin_end(16)
         vbox.append(self._grid)
 
-        self.window.set_child(vbox)
+        self.window.add(vbox)
 
 
 def main():
