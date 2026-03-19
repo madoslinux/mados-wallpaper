@@ -183,12 +183,40 @@ class WallpaperApp(Gtk.Application):
     def _apply_wallpaper(self, workspace: int):
         import subprocess
 
-        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        # Get wallpaper path for this workspace
+        assignment = self._assignments.get(workspace)
+        if not assignment:
+            return
+
+        wallpaper_id = assignment.get("wallpaper_id")
+        if not wallpaper_id:
+            return
+
+        wallpaper = get_wallpaper_by_id(int(wallpaper_id))
+        if not wallpaper:
+            return
+
+        wallpaper_path = wallpaper["path"]
+        mode = assignment.get("mode", "fill")
 
         # Try daemon first, fallback to direct methods
-        if subprocess.run(["pgrep", "-f", "mados-wallpaperd"], capture_output=True).returncode == 0:
-            subprocess.run(["mados-wallpaperd", "set", str(workspace)], check=False)
-        elif "sway" in desktop:
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "mados-wallpaperd"], capture_output=True, timeout=5
+            )
+            if result.returncode == 0:
+                subprocess.run(
+                    ["mados-wallpaperd", "set", str(workspace), wallpaper_path, mode],
+                    capture_output=True,
+                    timeout=10,
+                )
+                return
+        except Exception:
+            pass
+
+        # Fallback to direct methods
+        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        if "sway" in desktop:
             subprocess.run(["mados-sway-wallpaper-set", str(workspace)], check=False)
         elif "hyprland" in desktop:
             subprocess.run(["mados-hyprland-wallpaper-set", str(workspace)], check=False)
