@@ -6,6 +6,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 WALLPAPER_DIRS = [
     os.path.join(SCRIPT_DIR, "wallpapers"),
+    os.path.expanduser("~/.local/share/mados/wallpapers"),
     os.path.expanduser("~/Imágenes"),
     os.path.expanduser("~/Pictures"),
     "/usr/share/backgrounds",

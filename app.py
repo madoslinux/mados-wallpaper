@@ -345,16 +345,16 @@ class WallpaperApp(Gtk.Application):
 
         css = f"""
             .main-window {{
-                border-radius: 24px;
+                border-radius: 0;
                 background-color: {COLORS["bg_darkest"]}EE;
             }}
             window {{
                 background-color: {COLORS["bg_darkest"]};
-                border-radius: 24px;
+                border-radius: 0;
             }}
             .workspace-card {{
                 background-color: {COLORS["bg_dark"]}CC;
-                border-radius: 20px;
+                border-radius: 0;
                 border: 2px solid {COLORS["bg_medium"]};
                 padding: 12px;
             }}
@@ -368,7 +368,7 @@ class WallpaperApp(Gtk.Application):
                 font-size: 12px;
             }}
             .wallpaper-thumb {{
-                border-radius: 14px;
+                border-radius: 0;
             }}
             .wallpaper-name {{
                 color: {COLORS["fg_dark"]};
@@ -381,7 +381,7 @@ class WallpaperApp(Gtk.Application):
             .mode-button {{
                 background-color: {COLORS["bg_medium"]};
                 color: {COLORS["fg_light"]};
-                border-radius: 8px;
+                border-radius: 0;
                 border: 1px solid {COLORS["accent"]}66;
                 padding: 4px 8px;
                 font-size: 10px;
