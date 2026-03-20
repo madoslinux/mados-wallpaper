@@ -33,7 +33,9 @@ __app_name__ = app_module.__app_name__
 
 class WallpaperApp(Gtk.Application):
     def __init__(self) -> None:
-        super().__init__(application_id=__app_id__, flags=Gio.ApplicationFlags.NON_UNIQUE)
+        super().__init__(
+            application_id=__app_id__, flags=Gio.ApplicationFlags.NON_UNIQUE
+        )
         self.connect("activate", self._on_activate)
         self._selected_workspace = 1
         self._current_workspace = 1
@@ -54,7 +56,7 @@ class WallpaperApp(Gtk.Application):
             self._load_data()
             self._start_workspace_watcher()
             if self.window:
-                self.window.show()
+                self.window.show_all()
                 self.window.present()
             return False
 
@@ -73,7 +75,10 @@ class WallpaperApp(Gtk.Application):
         if "sway" in desktop:
             try:
                 result = subprocess.run(
-                    ["swaymsg", "-t", "get_workspaces"], capture_output=True, text=True, timeout=5
+                    ["swaymsg", "-t", "get_workspaces"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 import json
 
@@ -86,7 +91,10 @@ class WallpaperApp(Gtk.Application):
         elif "hyprland" in desktop:
             try:
                 result = subprocess.run(
-                    ["hyprctl", "activeworkspace"], capture_output=True, text=True, timeout=5
+                    ["hyprctl", "activeworkspace"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 for line in result.stdout.split("\n"):
                     if "workspace" in line:
@@ -141,29 +149,32 @@ class WallpaperApp(Gtk.Application):
     def _hyprland_watch_loop(self):
         try:
             process = subprocess.Popen(
-                ["swaymsg", "-t", "subscribe", '["workspace"]'],
+                ["hyprctl", "subscribe", "workspace"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            import json
-
             for line in process.stdout:
-                if not line.strip():
+                if not line.strip() or "workspace" not in line.lower():
                     continue
                 try:
-                    event = json.loads(line)
-                    if event.get("change") == "focus":
-                        ws_data = event.get("current", {})
-                        ws_name = ws_data.get("name", "1")
-                        try:
-                            new_ws = int(ws_name)
-                        except ValueError:
-                            new_ws = int(ws_name.split(":")[-1]) if ":" in ws_name else 1
-                        if new_ws != self._current_workspace:
-                            self._current_workspace = new_ws
-                            GLib.idle_add(self._on_workspace_changed, new_ws)
-                except json.JSONDecodeError:
+                    parts = line.strip().split()
+                    for i, part in enumerate(parts):
+                        if part.startswith("workspace") or (
+                            i > 0 and parts[i - 1] == "workspace"
+                        ):
+                            ws_str = parts[-1].split(">>")[-1].strip()
+                            try:
+                                new_ws = int(ws_str)
+                            except ValueError:
+                                new_ws = (
+                                    int(ws_str.split(":")[-1]) if ":" in ws_str else 1
+                                )
+                            if new_ws != self._current_workspace:
+                                self._current_workspace = new_ws
+                                GLib.idle_add(self._on_workspace_changed, new_ws)
+                            break
+                except Exception:
                     continue
         except Exception as e:
             print(f"hyprland watch error: {e}", file=sys.stderr)
@@ -172,7 +183,9 @@ class WallpaperApp(Gtk.Application):
 
     def _on_workspace_changed(self, workspace: int):
         if self._assignments.get(workspace):
-            wallpaper = get_wallpaper_by_id(self._assignments[workspace]["wallpaper_id"])
+            wallpaper = get_wallpaper_by_id(
+                self._assignments[workspace]["wallpaper_id"]
+            )
             if wallpaper:
                 self._apply_wallpaper(workspace)
 
@@ -196,34 +209,52 @@ class WallpaperApp(Gtk.Application):
         if not wallpaper:
             return
 
+        print(f"[DEBUG] _apply_wallpaper called for workspace {workspace}")
         wallpaper_path = wallpaper["path"]
         mode = assignment.get("mode", "fill")
+        print(f"[DEBUG] wallpaper_path={wallpaper_path}, mode={mode}")
 
         # Try daemon first, fallback to direct methods
         try:
             result = subprocess.run(
                 ["pgrep", "-f", "mados-wallpaperd"], capture_output=True, timeout=5
             )
+            print(f"[DEBUG] pgrep result: returncode={result.returncode}")
             if result.returncode == 0:
                 subprocess.run(
                     ["mados-wallpaperd", "set", str(workspace), wallpaper_path, mode],
                     capture_output=True,
                     timeout=10,
                 )
+                print(
+                    f"[DEBUG] Sent to daemon: mados-wallpaperd set {workspace} {wallpaper_path} {mode}"
+                )
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[DEBUG] Daemon communication failed: {e}")
 
         # Fallback to direct methods
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+        print(f"[DEBUG] Desktop: {desktop}")
+        cmd = None
         if "sway" in desktop:
-            subprocess.run(["mados-sway-wallpaper-set", str(workspace)], check=False)
+            cmd = "mados-sway-wallpaper-set"
         elif "hyprland" in desktop:
-            subprocess.run(["mados-hyprland-wallpaper-set", str(workspace)], check=False)
+            cmd = "mados-hyprland-wallpaper-set"
+        if cmd:
+            import shutil
+
+            if shutil.which(cmd):
+                subprocess.run([cmd, str(workspace)], capture_output=True, check=False)
+                print(f"[DEBUG] Called {cmd} {workspace}")
+            else:
+                print(f"[DEBUG] {cmd} not found in PATH")
 
     def _on_mode_click(self, workspace: int, wallpaper: dict | None):
         if wallpaper:
-            self._show_mode_selector(workspace, wallpaper["path"], wallpaper.get("mode", "fill"))
+            self._show_mode_selector(
+                workspace, wallpaper["path"], wallpaper.get("mode", "fill")
+            )
 
     def _show_picker(self, workspace: int):
         current_assignment = self._assignments.get(workspace, {})
@@ -235,7 +266,10 @@ class WallpaperApp(Gtk.Application):
             action=Gtk.FileChooserAction.OPEN,
         )
         dialog.add_buttons(
-            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK
+            Gtk.STOCK_CANCEL,
+            Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN,
+            Gtk.ResponseType.OK,
         )
 
         filter_images = Gtk.FileFilter()
@@ -261,7 +295,7 @@ class WallpaperApp(Gtk.Application):
         mode_dialog.set_modal(True)
         mode_dialog.set_transient_for(self.window)
         mode_dialog.set_decorated(False)
-        mode_dialog.set_css_classes(["main-window"])
+        mode_dialog.get_style_context().add_class("main-window")
         mode_dialog.set_application(self)
 
         mode_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -273,7 +307,7 @@ class WallpaperApp(Gtk.Application):
         filename = os.path.basename(file_path)
         mode_label = Gtk.Label(label=f"Workspace {workspace}: {filename[:20]}")
         mode_label.set_halign(Gtk.Align.CENTER)
-        mode_box.append(mode_label)
+        mode_box.pack_start(mode_label, False, False, 0)
 
         mode_combo = Gtk.ComboBoxText()
         for mode, desc in [
@@ -285,27 +319,29 @@ class WallpaperApp(Gtk.Application):
         ]:
             mode_combo.append(mode, desc)
         mode_combo.set_active_id(current_mode)
-        mode_box.append(mode_combo)
+        mode_box.pack_start(mode_combo, False, False, 0)
 
         btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         btn_box.set_halign(Gtk.Align.CENTER)
 
         cancel_btn = Gtk.Button(label="Cancel")
         cancel_btn.connect("clicked", lambda _: mode_dialog.destroy())
-        btn_box.append(cancel_btn)
+        btn_box.pack_start(cancel_btn, False, False, 0)
 
         save_btn = Gtk.Button(label="Save")
-        save_btn.set_css_classes(["suggested-action"])
+        save_btn.get_style_context().add_class("suggested-action")
 
         def on_save(_):
             mode = mode_combo.get_active_id()
             conn = get_connection()
-            conn.execute("INSERT OR IGNORE INTO wallpapers(path) VALUES(?)", (file_path,))
+            conn.execute(
+                "INSERT OR IGNORE INTO wallpapers(path) VALUES(?)", (file_path,)
+            )
             wallpaper_id = conn.execute(
                 "SELECT id FROM wallpapers WHERE path = ?", (file_path,)
             ).fetchone()[0]
+            conn.close()
             assign_wallpaper(workspace, wallpaper_id, mode)
-
             self._load_data()
             self._save_state()
             mode_dialog.destroy()
@@ -313,23 +349,21 @@ class WallpaperApp(Gtk.Application):
             self._apply_wallpaper(workspace)
 
         save_btn.connect("clicked", on_save)
-        btn_box.append(save_btn)
+        btn_box.pack_start(save_btn, False, False, 0)
 
-        mode_box.append(btn_box)
+        mode_box.pack_start(btn_box, False, False, 0)
 
         mode_dialog.add(mode_box)
 
-        key_controller = Gtk.EventControllerKey.new()
-        key_controller.connect(
-            "key-pressed",
-            lambda c, k, kc, s: mode_dialog.destroy() if k == Gdk.KEY_Escape else False,
+        mode_dialog.connect(
+            "key-press-event",
+            lambda w, e: mode_dialog.destroy() if e.keyval == Gdk.KEY_Escape else False,
         )
-        mode_dialog.add_controller(key_controller)
 
-        mode_dialog.show()
+        mode_dialog.show_all()
 
     def _populate_grid(self):
-        for child in self._grid:
+        for child in self._grid.get_children():
             self._grid.remove(child)
 
         for ws in range(1, MAX_WORKSPACES + 1):
@@ -341,8 +375,11 @@ class WallpaperApp(Gtk.Application):
             else:
                 wallpaper = None
 
-            card = WorkspaceCard(ws, wallpaper, self._on_workspace_click, self._on_mode_click)
+            card = WorkspaceCard(
+                ws, wallpaper, self._on_workspace_click, self._on_mode_click
+            )
             self._grid.attach(card, (ws - 1) % 3, (ws - 1) // 3, 1, 1)
+        self._grid.show_all()
 
     def _load_state(self):
         if os.path.exists(STATE_FILE):
@@ -358,8 +395,8 @@ class WallpaperApp(Gtk.Application):
         with open(STATE_FILE, "w") as f:
             json.dump({"last_workspace": self._selected_workspace}, f)
 
-    def _on_key_pressed(self, controller, keyval, keycode, state):
-        if keyval == Gdk.KEY_Escape:
+    def _on_key_pressed(self, widget, event):
+        if event.keyval == Gdk.KEY_Escape:
             self.window.close()
             return True
         return False
@@ -370,65 +407,10 @@ class WallpaperApp(Gtk.Application):
         self.window.set_resizable(False)
         self.window.set_decorated(False)
         self.window.set_titlebar(None)
-        self.window.set_css_classes(["main-window"])
 
-        key_controller = Gtk.EventControllerKey.new()
-        key_controller.connect("key-pressed", self._on_key_pressed)
-        self.window.add_controller(key_controller)
-
-        css = f"""
-            .main-window {{
-                border-radius: 0;
-                background-color: {COLORS["bg_darkest"]}EE;
-            }}
-            window {{
-                background-color: {COLORS["bg_darkest"]};
-                border-radius: 0;
-            }}
-            .workspace-card {{
-                background-color: {COLORS["bg_dark"]}CC;
-                border-radius: 0;
-                border: 2px solid {COLORS["bg_medium"]};
-                padding: 12px;
-            }}
-            .workspace-card.hovered {{
-                background-color: {COLORS["bg_medium"]};
-                border: 2px solid {COLORS["accent"]};
-            }}
-            .workspace-label {{
-                color: {COLORS["accent_teal"]};
-                font-weight: bold;
-                font-size: 12px;
-            }}
-            .wallpaper-thumb {{
-                border-radius: 0;
-            }}
-            .wallpaper-name {{
-                color: {COLORS["fg_dark"]};
-                font-size: 10px;
-            }}
-            .wallpaper-mode {{
-                color: {COLORS["accent_teal"]};
-                font-size: 9px;
-            }}
-            .mode-button {{
-                background-color: {COLORS["bg_medium"]};
-                color: {COLORS["fg_light"]};
-                border-radius: 0;
-                border: 1px solid {COLORS["accent"]}66;
-                padding: 4px 8px;
-                font-size: 10px;
-            }}
-            .mode-button:hover {{
-                background-color: {COLORS["accent"]};
-                color: {COLORS["bg_darkest"]};
-            }}
-        """
-        provider = Gtk.CssProvider()
-        provider.load_from_data(css)
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
+        accel_group = Gtk.AccelGroup()
+        self.window.add_accel_group(accel_group)
+        self.window.connect("key-press-event", self._on_key_pressed)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
@@ -439,7 +421,7 @@ class WallpaperApp(Gtk.Application):
         self._grid.set_margin_bottom(16)
         self._grid.set_margin_start(16)
         self._grid.set_margin_end(16)
-        vbox.append(self._grid)
+        vbox.pack_start(self._grid, True, True, 0)
 
         self.window.add(vbox)
 
