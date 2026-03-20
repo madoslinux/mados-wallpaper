@@ -1,6 +1,7 @@
 """Database operations for mados-wallpaper - uses daemon as source of truth."""
 
 import os
+import sqlite3
 import subprocess
 from typing import Any
 
@@ -20,8 +21,6 @@ def init_db() -> None:
     if _daemon_running():
         subprocess.run(["mados-wallpaperd", "init"], capture_output=True, timeout=10)
     else:
-        import sqlite3
-
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         conn = sqlite3.connect(DB_PATH)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -34,8 +33,18 @@ def init_db() -> None:
             wallpaper_id INTEGER NOT NULL REFERENCES wallpapers(id),
             mode TEXT DEFAULT 'fill'
         )""")
+
+        if not _column_exists(conn, "assignments", "mode"):
+            conn.execute("ALTER TABLE assignments ADD COLUMN mode TEXT DEFAULT 'fill'")
+
         conn.commit()
         conn.close()
+
+
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Check if a column exists in a table."""
+    cursor = conn.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cursor)
 
 
 def sync_wallpapers() -> None:
@@ -43,8 +52,6 @@ def sync_wallpapers() -> None:
     if _daemon_running():
         subprocess.run(["mados-wallpaperd", "sync"], capture_output=True, timeout=10)
         return
-
-    import sqlite3
 
     if not os.path.isfile(DB_PATH):
         return
@@ -73,8 +80,6 @@ def get_all_wallpapers() -> list[dict[str, Any]]:
     if not os.path.isfile(DB_PATH):
         return []
 
-    import sqlite3
-
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     wallpapers = []
@@ -91,8 +96,6 @@ def get_assignments() -> dict[int, dict[str, Any]]:
     if not os.path.isfile(DB_PATH):
         return {}
 
-    import sqlite3
-
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     assignments = {}
@@ -104,8 +107,6 @@ def get_assignments() -> dict[int, dict[str, Any]]:
 
 def assign_wallpaper(workspace: int, wallpaper_id: int, mode: str = "fill") -> None:
     """Assign wallpaper through daemon."""
-    import sqlite3
-
     if not os.path.isfile(DB_PATH):
         return
 
@@ -137,8 +138,6 @@ def get_wallpaper_by_id(wallpaper_id: int) -> dict[str, Any] | None:
     if not os.path.isfile(DB_PATH):
         return None
 
-    import sqlite3
-
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT id, path FROM wallpapers WHERE id = ?", (wallpaper_id,)).fetchone()
@@ -151,8 +150,6 @@ def get_wallpaper_by_id(wallpaper_id: int) -> dict[str, Any] | None:
 
 def get_connection():
     """Get direct database connection (for fallback)."""
-    import sqlite3
-
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=10.0, isolation_level="DEFERRED")
     conn.row_factory = sqlite3.Row
