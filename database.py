@@ -106,31 +106,49 @@ def get_assignments() -> dict[int, dict[str, Any]]:
 
 
 def assign_wallpaper(workspace: int, wallpaper_id: int, mode: str = "fill") -> None:
-    """Assign wallpaper through daemon."""
-    if not os.path.isfile(DB_PATH):
-        return
+    """Assign wallpaper through daemon - daemon handles wallpaper_id internally."""
+    print(
+        f"[DEBUG assign_wallpaper] workspace={workspace}, wallpaper_id={wallpaper_id}, mode={mode}"
+    )
 
+    daemon_running = _daemon_running()
+    print(f"[DEBUG assign_wallpaper] daemon_running={daemon_running}")
+
+    # Get wallpaper path from local DB
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT path FROM wallpapers WHERE id = ?", (wallpaper_id,)).fetchone()
+
+    if not row:
+        print(f"[DEBUG assign_wallpaper] ERROR: wallpaper_id {wallpaper_id} not found in local DB")
+        conn.close()
+        return
+
+    wallpaper_path = row["path"]
+    print(f"[DEBUG assign_wallpaper] wallpaper_path={wallpaper_path}")
     conn.close()
 
-    if row:
-        wallpaper_path = row["path"]
-        if _daemon_running():
-            subprocess.run(
-                ["mados-wallpaperd", "set", str(workspace), wallpaper_path, mode],
-                capture_output=True,
-                timeout=10,
-            )
-        else:
-            conn = sqlite3.connect(DB_PATH)
-            conn.execute(
-                "INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES(?, ?, ?)",
-                (workspace, wallpaper_id, mode),
-            )
-            conn.commit()
-            conn.close()
+    if daemon_running:
+        # Call daemon with workspace, path, and mode
+        result = subprocess.run(
+            ["mados-wallpaperd", "set", str(workspace), wallpaper_path, mode],
+            capture_output=True,
+            timeout=10,
+        )
+        print(
+            f"[DEBUG assign_wallpaper] daemon set result: returncode={result.returncode}, stdout={result.stdout}, stderr={result.stderr}"
+        )
+    else:
+        # Fallback: update local DB directly when daemon not available
+        print(f"[DEBUG assign_wallpaper] daemon NOT running, updating local DB as fallback")
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES(?, ?, ?)",
+            (workspace, wallpaper_id, mode),
+        )
+        conn.commit()
+        conn.close()
+        print(f"[DEBUG assign_wallpaper] local DB updated for workspace {workspace}")
 
 
 def get_wallpaper_by_id(wallpaper_id: int) -> dict[str, Any] | None:

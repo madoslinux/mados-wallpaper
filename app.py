@@ -33,9 +33,7 @@ __app_name__ = app_module.__app_name__
 
 class WallpaperApp(Gtk.Application):
     def __init__(self) -> None:
-        super().__init__(
-            application_id=__app_id__, flags=Gio.ApplicationFlags.NON_UNIQUE
-        )
+        super().__init__(application_id=__app_id__, flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.connect("activate", self._on_activate)
         self._selected_workspace = 1
         self._current_workspace = 1
@@ -160,16 +158,12 @@ class WallpaperApp(Gtk.Application):
                 try:
                     parts = line.strip().split()
                     for i, part in enumerate(parts):
-                        if part.startswith("workspace") or (
-                            i > 0 and parts[i - 1] == "workspace"
-                        ):
+                        if part.startswith("workspace") or (i > 0 and parts[i - 1] == "workspace"):
                             ws_str = parts[-1].split(">>")[-1].strip()
                             try:
                                 new_ws = int(ws_str)
                             except ValueError:
-                                new_ws = (
-                                    int(ws_str.split(":")[-1]) if ":" in ws_str else 1
-                                )
+                                new_ws = int(ws_str.split(":")[-1]) if ":" in ws_str else 1
                             if new_ws != self._current_workspace:
                                 self._current_workspace = new_ws
                                 GLib.idle_add(self._on_workspace_changed, new_ws)
@@ -183,9 +177,7 @@ class WallpaperApp(Gtk.Application):
 
     def _on_workspace_changed(self, workspace: int):
         if self._assignments.get(workspace):
-            wallpaper = get_wallpaper_by_id(
-                self._assignments[workspace]["wallpaper_id"]
-            )
+            wallpaper = get_wallpaper_by_id(self._assignments[workspace]["wallpaper_id"])
             if wallpaper:
                 self._apply_wallpaper(workspace)
 
@@ -196,17 +188,25 @@ class WallpaperApp(Gtk.Application):
     def _apply_wallpaper(self, workspace: int):
         import subprocess
 
+        print(f"[DEBUG _apply_wallpaper] START workspace={workspace}")
+
         # Get wallpaper path for this workspace
         assignment = self._assignments.get(workspace)
+        print(f"[DEBUG _apply_wallpaper] assignment={assignment}")
         if not assignment:
+            print(f"[DEBUG _apply_wallpaper] No assignment for workspace {workspace}")
             return
 
         wallpaper_id = assignment.get("wallpaper_id")
+        print(f"[DEBUG _apply_wallpaper] wallpaper_id={wallpaper_id}")
         if not wallpaper_id:
+            print(f"[DEBUG _apply_wallpaper] No wallpaper_id")
             return
 
         wallpaper = get_wallpaper_by_id(int(wallpaper_id))
+        print(f"[DEBUG _apply_wallpaper] wallpaper from DB: {wallpaper}")
         if not wallpaper:
+            print(f"[DEBUG _apply_wallpaper] No wallpaper found for id {wallpaper_id}")
             return
 
         print(f"[DEBUG] _apply_wallpaper called for workspace {workspace}")
@@ -215,46 +215,54 @@ class WallpaperApp(Gtk.Application):
         print(f"[DEBUG] wallpaper_path={wallpaper_path}, mode={mode}")
 
         # Try daemon first, fallback to direct methods
+        daemon_running = False
         try:
             result = subprocess.run(
                 ["pgrep", "-f", "mados-wallpaperd"], capture_output=True, timeout=5
             )
             print(f"[DEBUG] pgrep result: returncode={result.returncode}")
-            if result.returncode == 0:
-                subprocess.run(
+            daemon_running = result.returncode == 0
+            if daemon_running:
+                print(f"[DEBUG] Calling daemon set command...")
+                result = subprocess.run(
                     ["mados-wallpaperd", "set", str(workspace), wallpaper_path, mode],
                     capture_output=True,
                     timeout=10,
                 )
+                print(f"[DEBUG] Daemon set result: returncode={result.returncode}")
+                print(f"[DEBUG] stdout: {result.stdout}")
+                print(f"[DEBUG] stderr: {result.stderr[:200] if result.stderr else 'empty'}")
                 print(
-                    f"[DEBUG] Sent to daemon: mados-wallpaperd set {workspace} {wallpaper_path} {mode}"
+                    f"[DEBUG] Sent to daemon: mados-wallpaperd set {workspace} '{wallpaper_path}' {mode}"
                 )
                 return
         except Exception as e:
             print(f"[DEBUG] Daemon communication failed: {e}")
 
-        # Fallback to direct methods
-        desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
-        print(f"[DEBUG] Desktop: {desktop}")
-        cmd = None
-        if "sway" in desktop:
-            cmd = "mados-sway-wallpaper-set"
-        elif "hyprland" in desktop:
-            cmd = "mados-hyprland-wallpaper-set"
-        if cmd:
-            import shutil
+        if not daemon_running:
+            print(f"[DEBUG] Daemon not running, trying fallback methods")
+            # Fallback to direct methods
+            desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+            print(f"[DEBUG] Desktop: {desktop}")
+            cmd = None
+            if "sway" in desktop:
+                cmd = "mados-sway-wallpaper-set"
+            elif "hyprland" in desktop:
+                cmd = "mados-hyprland-wallpaper-set"
+            if cmd:
+                import shutil
 
-            if shutil.which(cmd):
-                subprocess.run([cmd, str(workspace)], capture_output=True, check=False)
-                print(f"[DEBUG] Called {cmd} {workspace}")
+                if shutil.which(cmd):
+                    subprocess.run([cmd, str(workspace)], capture_output=True, check=False)
+                    print(f"[DEBUG] Called {cmd} {workspace}")
+                else:
+                    print(f"[DEBUG] {cmd} not found in PATH")
             else:
-                print(f"[DEBUG] {cmd} not found in PATH")
+                print(f"[DEBUG] No wallpaper command found for desktop: {desktop}")
 
     def _on_mode_click(self, workspace: int, wallpaper: dict | None):
         if wallpaper:
-            self._show_mode_selector(
-                workspace, wallpaper["path"], wallpaper.get("mode", "fill")
-            )
+            self._show_mode_selector(workspace, wallpaper["path"], wallpaper.get("mode", "fill"))
 
     def _show_picker(self, workspace: int):
         current_assignment = self._assignments.get(workspace, {})
@@ -332,21 +340,26 @@ class WallpaperApp(Gtk.Application):
         save_btn.get_style_context().add_class("suggested-action")
 
         def on_save(_):
+            print(f"[DEBUG on_save] workspace={workspace}, file_path={file_path}")
             mode = mode_combo.get_active_id()
+            print(f"[DEBUG on_save] mode={mode}")
             conn = get_connection()
-            conn.execute(
-                "INSERT OR IGNORE INTO wallpapers(path) VALUES(?)", (file_path,)
-            )
+            conn.execute("INSERT OR IGNORE INTO wallpapers(path) VALUES(?)", (file_path,))
+            conn.commit()  # Commit the insert before querying
             wallpaper_id = conn.execute(
                 "SELECT id FROM wallpapers WHERE path = ?", (file_path,)
             ).fetchone()[0]
+            print(f"[DEBUG on_save] wallpaper_id={wallpaper_id}")
             conn.close()
             assign_wallpaper(workspace, wallpaper_id, mode)
+            print(f"[DEBUG on_save] after assign_wallpaper")
             self._load_data()
+            print(f"[DEBUG on_save] after _load_data")
             self._save_state()
             mode_dialog.destroy()
-
+            print(f"[DEBUG on_save] before _apply_wallpaper")
             self._apply_wallpaper(workspace)
+            print(f"[DEBUG on_save] done")
 
         save_btn.connect("clicked", on_save)
         btn_box.pack_start(save_btn, False, False, 0)
@@ -375,9 +388,7 @@ class WallpaperApp(Gtk.Application):
             else:
                 wallpaper = None
 
-            card = WorkspaceCard(
-                ws, wallpaper, self._on_workspace_click, self._on_mode_click
-            )
+            card = WorkspaceCard(ws, wallpaper, self._on_workspace_click, self._on_mode_click)
             self._grid.attach(card, (ws - 1) % 3, (ws - 1) // 3, 1, 1)
         self._grid.show_all()
 
