@@ -407,6 +407,7 @@ class WallpaperApp(Gtk.Application):
         self.window.set_resizable(False)
         self.window.set_decorated(False)
         self.window.set_titlebar(None)
+        self.window.set_icon_name("preferences-desktop-wallpaper")
 
         accel_group = Gtk.AccelGroup()
         self.window.add_accel_group(accel_group)
