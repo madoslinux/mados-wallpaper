@@ -2,7 +2,7 @@
 Name=madOS Wallpaper
 Comment=Manage wallpapers for each workspace
 Exec=mados-wallpaper
-Icon=mados-wallpaper
+Icon=preferences-desktop-display-color
 Terminal=false
 Type=Application
 Categories=Settings;DesktopSettings;
