@@ -109,7 +109,7 @@ def assign_random_wallpapers(max_ws=6):
 
 def detect_wm():
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
-    if "sway" in desktop:
+    if "sway" in desktop or "niri" in desktop:
         return "sway"
     elif "hypr" in desktop:
         return "hyprland"
