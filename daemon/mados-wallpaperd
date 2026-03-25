@@ -253,31 +253,42 @@ def watch_workspace_hyprland():
     try:
         proc = subprocess.Popen(
             ["hyprctl", "subscribe", "workspace"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
         )
         last_ws = None
-        for line in proc.stdout:
-            if not line.strip() or "workspace" not in line.lower():
-                continue
+        import select
+        while True:
             try:
-                parts = line.strip().split()
-                for i, part in enumerate(parts):
-                    if part.startswith("workspace") or (i > 0 and parts[i - 1] == "workspace"):
-                        ws_str = parts[-1].split(">>")[-1].strip()
-                        try:
-                            ws = int(ws_str)
-                        except ValueError:
-                            ws = int(ws_str.split(":")[-1]) if ":" in ws_str else 1
-                        if ws != last_ws:
-                            log(f"Hyprland workspace changed: {last_ws} -> {ws}")
-                            wp = get_wallpaper_for_workspace(ws)
-                            mode = get_mode_for_workspace(ws)
-                            if wp:
-                                apply_wallpaper(wp, mode)
-                            last_ws = ws
+                ready, _, _ = select.select([proc.stdout], [], [], 5)
+                if ready:
+                    line = proc.stdout.readline()
+                    if not line:
+                        log("Hyprland subscription ended")
                         break
-            except Exception as e:
-                log(f"Hyprland event error: {e}")
+                    if "workspace" not in line.lower():
+                        continue
+                    try:
+                        parts = line.strip().split()
+                        for i, part in enumerate(parts):
+                            if part.startswith("workspace") or (i > 0 and parts[i - 1] == "workspace"):
+                                ws_str = parts[-1].split(">>")[-1].strip()
+                                try:
+                                    ws = int(ws_str)
+                                except ValueError:
+                                    ws = int(ws_str.split(":")[-1]) if ":" in ws_str else 1
+                                if ws != last_ws:
+                                    log(f"Hyprland workspace changed: {last_ws} -> {ws}")
+                                    wp = get_wallpaper_for_workspace(ws)
+                                    mode = get_mode_for_workspace(ws)
+                                    if wp:
+                                        apply_wallpaper(wp, mode)
+                                    last_ws = ws
+                                break
+                    except Exception as e:
+                        log(f"Hyprland event error: {e}")
+            except select.error as e:
+                log(f"Hyprland select error: {e}")
+                continue
     except Exception as e:
         log(f"Hyprland watcher error: {e}")
 
