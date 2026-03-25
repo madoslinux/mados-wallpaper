@@ -186,7 +186,12 @@ def apply_wallpaper(wp, mode="fill"):
     
     if not swww_running:
         log("Starting swww-daemon...")
-        subprocess.Popen(["swww-daemon"], detached=True)
+        subprocess.Popen(
+            ["nohup", "swww-daemon", "&"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         for _ in range(30):
             time.sleep(0.3)
             try:
