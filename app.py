@@ -3,6 +3,7 @@
 import os
 import json
 import sys
+import time
 import traceback
 import subprocess
 import threading
@@ -70,13 +71,37 @@ class WallpaperApp(Gtk.Application):
     def _get_current_workspace(self) -> int:
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
-        if "sway" in desktop:
+        if "niri" in desktop:
+            try:
+                import socket
+                socket_path = os.environ.get("NIRI_SOCKET", os.path.expanduser("~/.niri.sock"))
+                if os.path.exists(socket_path):
+                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s.settimeout(1)
+                    s.connect(socket_path)
+                    s.sendall(b'{"Workspaces":null}\n')
+                    data = b""
+                    while True:
+                        chunk = s.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                        if b"\n" in data:
+                            break
+                    s.close()
+                    resp = json.loads(data.decode())
+                    for ws in resp.get("Ok", {}).get("Workspaces", []):
+                        if ws.get("is_focused"):
+                            return ws.get("id", 1)
+            except Exception:
+                pass
+        elif "sway" in desktop:
             try:
                 result = subprocess.run(
                     ["swaymsg", "-t", "get_workspaces"],
                     capture_output=True,
                     text=True,
-                    timeout=5,
+                    timeout=1,
                 )
                 import json
 
@@ -92,7 +117,7 @@ class WallpaperApp(Gtk.Application):
                     ["hyprctl", "activeworkspace"],
                     capture_output=True,
                     text=True,
-                    timeout=5,
+                    timeout=1,
                 )
                 for line in result.stdout.split("\n"):
                     if "workspace" in line:
@@ -110,7 +135,11 @@ class WallpaperApp(Gtk.Application):
     def _start_workspace_watcher(self):
         desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
 
-        if "sway" in desktop:
+        if "niri" in desktop:
+            self._current_workspace = self._get_current_workspace()
+            thread = threading.Thread(target=self._niri_watch_loop, daemon=True)
+            thread.start()
+        elif "sway" in desktop:
             self._current_workspace = self._get_current_workspace()
             thread = threading.Thread(target=self._sway_watch_loop, daemon=True)
             thread.start()
@@ -174,6 +203,49 @@ class WallpaperApp(Gtk.Application):
             print(f"hyprland watch error: {e}", file=sys.stderr)
         except KeyboardInterrupt:
             pass
+
+    def _niri_watch_loop(self):
+        import socket
+        socket_path = os.environ.get("NIRI_SOCKET", os.path.expanduser("~/.niri.sock"))
+        last_ws = None
+        while True:
+            try:
+                if not os.path.exists(socket_path):
+                    time.sleep(1)
+                    continue
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(1)
+                s.connect(socket_path)
+                s.sendall(b'{"EventStream":{"Filter":["Workspace"]}}\n')
+                s.shutdown(socket.SHUT_WR)
+                data = b""
+                while True:
+                    try:
+                        chunk = s.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                    except socket.timeout:
+                        break
+                s.close()
+                if data:
+                    for line in data.decode().strip().split("\n"):
+                        if not line.strip():
+                            continue
+                        try:
+                            resp = json.loads(line)
+                            event = resp.get("Event", {})
+                            if "WorkspaceFocused" in event:
+                                ws = event["WorkspaceFocused"].get("id", 1)
+                                if ws != last_ws:
+                                    self._current_workspace = ws
+                                    GLib.idle_add(self._on_workspace_changed, ws)
+                                    last_ws = ws
+                        except json.JSONDecodeError:
+                            continue
+            except Exception as e:
+                print(f"niri watch error: {e}", file=sys.stderr)
+                time.sleep(1)
 
     def _on_workspace_changed(self, workspace: int):
         if self._assignments.get(workspace):
