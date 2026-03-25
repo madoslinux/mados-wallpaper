@@ -13,7 +13,7 @@ import threading
 import re
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 DATA_DIR = os.path.expanduser("~/.local/share/mados")
 DB_PATH = os.path.join(DATA_DIR, "wallpapers.db")
@@ -21,26 +21,32 @@ SYSTEM_WALLPAPERS = "/usr/share/backgrounds"
 PID_FILE = os.path.join(DATA_DIR, "mados-wallpaperd.pid")
 PORT = 18765  # Non-privileged port on localhost
 
+
 def log(msg):
     print(f"[mados-wallpaperd] {msg}", file=sys.stderr, flush=True)
+
 
 def init_db():
     os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS wallpapers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             path TEXT UNIQUE NOT NULL
         )
-    """)
-    conn.execute("""
+    """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS assignments (
             workspace INTEGER PRIMARY KEY,
             wallpaper_id INTEGER NOT NULL REFERENCES wallpapers(id),
             mode TEXT DEFAULT 'fill'
         )
-    """)
+    """
+    )
     # Add mode column if missing (migration)
     try:
         conn.execute("SELECT mode FROM assignments LIMIT 1")
@@ -49,32 +55,35 @@ def init_db():
     conn.commit()
     conn.close()
 
+
 def populate_from_system():
     conn = sqlite3.connect(DB_PATH)
     count = conn.execute("SELECT COUNT(*) FROM wallpapers").fetchone()[0]
     if count > 0:
         conn.close()
         return
-    
+
     if not os.path.isdir(SYSTEM_WALLPAPERS):
         log(f"System wallpapers dir not found: {SYSTEM_WALLPAPERS}")
         conn.close()
         return
-    
+
     import glob
+
     files = glob.glob(os.path.join(SYSTEM_WALLPAPERS, "*.png"))
     files += glob.glob(os.path.join(SYSTEM_WALLPAPERS, "*.jpg"))
     files += glob.glob(os.path.join(SYSTEM_WALLPAPERS, "*.jpeg"))
     files += glob.glob(os.path.join(SYSTEM_WALLPAPERS, "*.webp"))
-    
+
     if not files:
         log(f"No wallpapers found in {SYSTEM_WALLPAPERS}")
         conn.close()
         return
-    
+
     import random
+
     random.shuffle(files)
-    
+
     inserted = 0
     for f in files:
         try:
@@ -83,10 +92,11 @@ def populate_from_system():
             inserted += 1
         except Exception as e:
             log(f"Error inserting wallpaper: {e}")
-    
+
     conn.commit()
     conn.close()
     log(f"Inserted {inserted} wallpapers from system")
+
 
 def assign_random_wallpapers(max_ws=6):
     conn = sqlite3.connect(DB_PATH)
@@ -95,18 +105,21 @@ def assign_random_wallpapers(max_ws=6):
         conn.close()
         log("No wallpapers to assign")
         return
-    
+
     wallpapers = [w[0] for w in wallpapers]
     import random
-    
+
     shuffled = random.sample(wallpapers, k=len(wallpapers))
     for i, ws in enumerate(range(1, max_ws + 1)):
         wp_id = shuffled[i % len(shuffled)]
-        conn.execute(f"INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES({ws}, {wp_id}, 'fill')")
-    
+        conn.execute(
+            f"INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES({ws}, {wp_id}, 'fill')"
+        )
+
     conn.commit()
     conn.close()
     log(f"Assigned random wallpapers to {max_ws} workspaces")
+
 
 def detect_wm():
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
@@ -129,12 +142,15 @@ def detect_wm():
         pass
     return "unknown"
 
+
 def get_current_workspace(wm):
     try:
         if wm == "sway":
             result = subprocess.run(
                 ["swaymsg", "-t", "get_workspaces"],
-                capture_output=True, text=True, timeout=1
+                capture_output=True,
+                text=True,
+                timeout=1,
             )
             for ws in json.loads(result.stdout):
                 if ws.get("focused"):
@@ -142,15 +158,20 @@ def get_current_workspace(wm):
         elif wm == "hyprland":
             result = subprocess.run(
                 ["hyprctl", "activeworkspace"],
-                capture_output=True, text=True, timeout=1
+                capture_output=True,
+                text=True,
+                timeout=1,
             )
             match = re.search(r"workspace ID (\d+)", result.stdout)
             if match:
                 return int(match.group(1))
         elif wm == "niri":
-            socket_path = os.environ.get("NIRI_SOCKET", os.path.expanduser("~/.niri.sock"))
+            socket_path = os.environ.get(
+                "NIRI_SOCKET", os.path.expanduser("~/.niri.sock")
+            )
             if os.path.exists(socket_path):
                 import socket
+
                 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 s.settimeout(1)
                 s.connect(socket_path)
@@ -172,12 +193,13 @@ def get_current_workspace(wm):
         log(f"Error getting workspace: {e}")
     return 1
 
+
 def get_wallpaper_for_workspace(ws):
     try:
         conn = sqlite3.connect(DB_PATH)
         result = conn.execute(
             "SELECT w.path FROM wallpapers w JOIN assignments a ON w.id = a.wallpaper_id WHERE a.workspace = ?",
-            (ws,)
+            (ws,),
         ).fetchone()
         conn.close()
         return result[0] if result else None
@@ -185,29 +207,33 @@ def get_wallpaper_for_workspace(ws):
         log(f"Error getting wallpaper: {e}")
         return None
 
+
 def get_mode_for_workspace(ws):
     try:
         conn = sqlite3.connect(DB_PATH)
-        result = conn.execute("SELECT mode FROM assignments WHERE workspace = ?", (ws,)).fetchone()
+        result = conn.execute(
+            "SELECT mode FROM assignments WHERE workspace = ?", (ws,)
+        ).fetchone()
         conn.close()
         return result[0] if result else "fill"
     except Exception:
         return "fill"
 
+
 def apply_wallpaper(wp, mode="fill"):
     if not wp or not os.path.isfile(wp):
         log(f"Wallpaper not found: {wp}")
         return False
-    
+
     log(f"Applying wallpaper: {wp} (mode: {mode})")
-    
+
     # Check for swww
     try:
         result = subprocess.run(["swww", "query"], capture_output=True, timeout=2)
         swww_running = result.returncode == 0
     except Exception:
         swww_running = False
-    
+
     if not swww_running:
         log("Starting swww-daemon...")
         subprocess.Popen(
@@ -219,24 +245,35 @@ def apply_wallpaper(wp, mode="fill"):
         for _ in range(30):
             time.sleep(0.3)
             try:
-                result = subprocess.run(["swww", "query"], capture_output=True, timeout=1)
+                result = subprocess.run(
+                    ["swww", "query"], capture_output=True, timeout=1
+                )
                 if result.returncode == 0:
                     swww_running = True
                     break
             except Exception:
                 pass
-    
+
     if swww_running:
         try:
             subprocess.run(
-                ["swww", "img", wp, "--transition-type", "wipe", "--transition-duration", "0.3"],
-                capture_output=True, timeout=10
+                [
+                    "swww",
+                    "img",
+                    wp,
+                    "--transition-type",
+                    "wipe",
+                    "--transition-duration",
+                    "0.3",
+                ],
+                capture_output=True,
+                timeout=10,
             )
             log("Wallpaper applied via swww")
             return True
         except Exception as e:
             log(f"swww error: {e}")
-    
+
     # Fallback to swaybg
     try:
         subprocess.run(["pkill", "-f", "swaybg.*-i"], capture_output=True)
@@ -245,18 +282,22 @@ def apply_wallpaper(wp, mode="fill"):
         return True
     except Exception as e:
         log(f"swaybg error: {e}")
-    
+
     log("No wallpaper setter available")
     return False
+
 
 def watch_workspace_hyprland():
     try:
         proc = subprocess.Popen(
             ["hyprctl", "subscribe", "workspace"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
         last_ws = None
         import select
+
         while True:
             try:
                 ready, _, _ = select.select([proc.stdout], [], [], 5)
@@ -270,14 +311,22 @@ def watch_workspace_hyprland():
                     try:
                         parts = line.strip().split()
                         for i, part in enumerate(parts):
-                            if part.startswith("workspace") or (i > 0 and parts[i - 1] == "workspace"):
+                            if part.startswith("workspace") or (
+                                i > 0 and parts[i - 1] == "workspace"
+                            ):
                                 ws_str = parts[-1].split(">>")[-1].strip()
                                 try:
                                     ws = int(ws_str)
                                 except ValueError:
-                                    ws = int(ws_str.split(":")[-1]) if ":" in ws_str else 1
+                                    ws = (
+                                        int(ws_str.split(":")[-1])
+                                        if ":" in ws_str
+                                        else 1
+                                    )
                                 if ws != last_ws:
-                                    log(f"Hyprland workspace changed: {last_ws} -> {ws}")
+                                    log(
+                                        f"Hyprland workspace changed: {last_ws} -> {ws}"
+                                    )
                                     wp = get_wallpaper_for_workspace(ws)
                                     mode = get_mode_for_workspace(ws)
                                     if wp:
@@ -292,70 +341,94 @@ def watch_workspace_hyprland():
     except Exception as e:
         log(f"Hyprland watcher error: {e}")
 
+
 def watch_workspace_niri():
+    import socket
+    import select
+
     socket_path = os.environ.get("NIRI_SOCKET", os.path.expanduser("~/.niri.sock"))
     last_ws = None
+
     while True:
         try:
             if not os.path.exists(socket_path):
-                time.sleep(1)
+                log("Niri socket not found, waiting...")
+                time.sleep(2)
                 continue
-            import socket
+
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(1)
+            s.settimeout(5)
             s.connect(socket_path)
             s.sendall(b'{"EventStream":{"Filter":["Workspace"]}}\n')
-            s.shutdown(socket.SHUT_WR)
-            data = b""
+            s.settimeout(1)
+
+            log("Niri event stream connected")
             while True:
                 try:
-                    chunk = s.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
+                    ready, _, _ = select.select([s], [], [], 5)
+                    if ready:
+                        data = s.recv(4096)
+                        if not data:
+                            log("Niri socket closed")
+                            break
+                        for line in data.decode().strip().split("\n"):
+                            if not line.strip():
+                                continue
+                            try:
+                                resp = json.loads(line)
+                                event = resp.get("Event", {})
+                                if "WorkspaceFocused" in event:
+                                    ws = event["WorkspaceFocused"].get("id", 1)
+                                    if ws != last_ws:
+                                        log(
+                                            f"Niri workspace changed: {last_ws} -> {ws}"
+                                        )
+                                        wp = get_wallpaper_for_workspace(ws)
+                                        mode = get_mode_for_workspace(ws)
+                                        if wp:
+                                            apply_wallpaper(wp, mode)
+                                        last_ws = ws
+                            except json.JSONDecodeError:
+                                continue
                 except socket.timeout:
-                    break
+                    continue
             s.close()
-            if data:
-                for line in data.decode().strip().split("\n"):
-                    if not line.strip():
-                        continue
-                    try:
-                        resp = json.loads(line)
-                        event = resp.get("Event", {})
-                        if "WorkspaceFocused" in event:
-                            ws = event["WorkspaceFocused"].get("id", 1)
-                            if ws != last_ws:
-                                log(f"Niri workspace changed: {last_ws} -> {ws}")
-                                wp = get_wallpaper_for_workspace(ws)
-                                mode = get_mode_for_workspace(ws)
-                                if wp:
-                                    apply_wallpaper(wp, mode)
-                                last_ws = ws
-                    except json.JSONDecodeError:
-                        continue
         except Exception as e:
             log(f"Niri watcher error: {e}")
-            time.sleep(1)
+            time.sleep(2)
+
 
 def watch_workspace_sway():
     try:
         proc = subprocess.Popen(
             ["swaymsg", "-t", "subscribe", "-m", '["workspace"]'],
-            stdout=subprocess.PIPE, text=True
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
-        for line in proc.stdout:
+        import select
+
+        while True:
             try:
-                event = json.loads(line)
-                ws = event.get("current", {}).get("num")
-                if ws:
-                    log(f"Sway workspace event: {ws}")
-                    wp = get_wallpaper_for_workspace(ws)
-                    mode = get_mode_for_workspace(ws)
-                    if wp:
-                        apply_wallpaper(wp, mode)
-            except Exception as e:
-                log(f"Sway event error: {e}")
+                ready, _, _ = select.select([proc.stdout], [], [], 5)
+                if ready:
+                    line = proc.stdout.readline()
+                    if not line:
+                        log("Sway subscription ended")
+                        break
+                    try:
+                        event = json.loads(line)
+                        ws = event.get("current", {}).get("num")
+                        if ws:
+                            log(f"Sway workspace event: {ws}")
+                            wp = get_wallpaper_for_workspace(ws)
+                            mode = get_mode_for_workspace(ws)
+                            if wp:
+                                apply_wallpaper(wp, mode)
+                    except json.JSONDecodeError:
+                        pass
+            except select.error:
+                continue
     except Exception as e:
         log(f"Sway watcher error: {e}")
 
@@ -363,92 +436,96 @@ def watch_workspace_sway():
 class WallpaperHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress HTTP logging
-    
+
     def send_json(self, data, status=200):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
-    
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        
+
         if path == "/wallpapers":
             conn = sqlite3.connect(DB_PATH)
             wallpapers = conn.execute("SELECT id, path FROM wallpapers").fetchall()
             conn.close()
-            self.send_json({"wallpapers": [{"id": w[0], "path": w[1]} for w in wallpapers]})
-        
+            self.send_json(
+                {"wallpapers": [{"id": w[0], "path": w[1]} for w in wallpapers]}
+            )
+
         elif path == "/current":
             wm = detect_wm()
             ws = get_current_workspace(wm)
             self.send_json({"workspace": ws, "wm": wm})
-        
+
         elif path.startswith("/wallpaper/"):
             try:
                 ws = int(path.split("/")[-1])
             except ValueError:
                 self.send_json({"error": "Invalid workspace"}, 400)
                 return
-            
+
             wp = get_wallpaper_for_workspace(ws)
             mode = get_mode_for_workspace(ws)
             self.send_json({"workspace": ws, "path": wp, "mode": mode})
-        
+
         else:
             self.send_json({"error": "Not found"}, 404)
-    
+
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        
+
         if not path.startswith("/wallpaper/"):
             self.send_json({"error": "Not found"}, 404)
             return
-        
+
         try:
             ws = int(path.split("/")[-1])
         except ValueError:
             self.send_json({"error": "Invalid workspace"}, 400)
             return
-        
+
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length).decode() if content_length > 0 else "{}"
-        
+
         try:
             data = json.loads(body)
         except json.JSONDecodeError:
             self.send_json({"error": "Invalid JSON"}, 400)
             return
-        
+
         wp = data.get("path")
         mode = data.get("mode", "fill")
-        
+
         wm = detect_wm()
         current_ws = get_current_workspace(wm)
-        
+
         # Update DB if path provided
         if wp and os.path.isfile(wp):
             conn = sqlite3.connect(DB_PATH)
-            
+
             # Get or insert wallpaper
-            result = conn.execute("SELECT id FROM wallpapers WHERE path = ?", (wp,)).fetchone()
+            result = conn.execute(
+                "SELECT id FROM wallpapers WHERE path = ?", (wp,)
+            ).fetchone()
             if result:
                 wp_id = result[0]
             else:
                 escaped = wp.replace("'", "''")
                 conn.execute(f"INSERT INTO wallpapers(path) VALUES('{escaped}')")
                 wp_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-            
+
             conn.execute(
                 "INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES(?, ?, ?)",
-                (ws, wp_id, mode)
+                (ws, wp_id, mode),
             )
             conn.commit()
             conn.close()
             log(f"Updated DB: workspace {ws} = {wp}")
-            
+
             # Apply if current workspace
             if ws == current_ws:
                 apply_wallpaper(wp, mode)
@@ -459,28 +536,43 @@ class WallpaperHandler(BaseHTTPRequestHandler):
             # No path = apply from DB
             wp = get_wallpaper_for_workspace(ws)
             mode = get_mode_for_workspace(ws)
-            
+
             if wp:
                 apply_wallpaper(wp, mode)
-                self.send_json({"ok": True, "applied": True, "workspace": ws, "path": wp, "mode": mode})
+                self.send_json(
+                    {
+                        "ok": True,
+                        "applied": True,
+                        "workspace": ws,
+                        "path": wp,
+                        "mode": mode,
+                    }
+                )
             else:
-                self.send_json({"ok": True, "applied": False, "workspace": ws, "error": "no wallpaper"})
+                self.send_json(
+                    {
+                        "ok": True,
+                        "applied": False,
+                        "workspace": ws,
+                        "error": "no wallpaper",
+                    }
+                )
 
 
 def run_daemon():
     log(f"Starting daemon on localhost:{PORT}")
-    
+
     # Init DB
     init_db()
     populate_from_system()
-    
+
     # Assign wallpapers if needed
     conn = sqlite3.connect(DB_PATH)
     count = conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0]
     conn.close()
     if count == 0:
         assign_random_wallpapers(6)
-    
+
     # Apply current workspace wallpaper
     wm = detect_wm()
     ws = get_current_workspace(wm)
@@ -489,7 +581,7 @@ def run_daemon():
     log(f"Current workspace: {ws}, wallpaper: {wp}")
     if wp:
         apply_wallpaper(wp, mode)
-    
+
     # Start workspace watcher in background
     if wm == "hyprland":
         threading.Thread(target=watch_workspace_hyprland, daemon=True).start()
@@ -497,12 +589,12 @@ def run_daemon():
         threading.Thread(target=watch_workspace_sway, daemon=True).start()
     elif wm == "niri":
         threading.Thread(target=watch_workspace_niri, daemon=True).start()
-    
+
     # Save PID
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(PID_FILE, "w") as f:
         f.write(str(os.getpid()))
-    
+
     # Start HTTP server
     server = HTTPServer(("127.0.0.1", PORT), WallpaperHandler)
     log(f"Daemon ready on http://localhost:{PORT}")
@@ -511,37 +603,43 @@ def run_daemon():
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="mados-wallpaperd")
     parser.add_argument("-d", "--daemon", action="store_true", help="Start as daemon")
-    parser.add_argument("command", nargs="?", help="Command: list, get WS, set WS [PATH] [MODE]")
+    parser.add_argument(
+        "command", nargs="?", help="Command: list, get WS, set WS [PATH] [MODE]"
+    )
     parser.add_argument("args", nargs="*", help="Arguments for command")
-    
+
     args = parser.parse_args()
-    
+
     if args.command in ("list", "get", "set", "current"):
         # CLI mode - init DB and handle command directly
         init_db()
         populate_from_system()
-        
+
         # Assign if needed
         conn = sqlite3.connect(DB_PATH)
         count = conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0]
         conn.close()
         if count == 0:
             assign_random_wallpapers(6)
-        
+
         if args.command == "list":
             conn = sqlite3.connect(DB_PATH)
             wallpapers = conn.execute("SELECT id, path FROM wallpapers").fetchall()
             conn.close()
-            print(json.dumps({"wallpapers": [{"id": w[0], "path": w[1]} for w in wallpapers]}))
-        
+            print(
+                json.dumps(
+                    {"wallpapers": [{"id": w[0], "path": w[1]} for w in wallpapers]}
+                )
+            )
+
         elif args.command == "current":
             wm = detect_wm()
             ws = get_current_workspace(wm)
             print(json.dumps({"workspace": ws, "wm": wm}))
-        
+
         elif args.command == "get":
             if not args.args:
                 print(json.dumps({"error": "workspace required"}))
@@ -554,7 +652,7 @@ if __name__ == "__main__":
                     wp = get_wallpaper_for_workspace(ws)
                     mode = get_mode_for_workspace(ws)
                     print(json.dumps({"workspace": ws, "path": wp, "mode": mode}))
-        
+
         elif args.command == "set":
             if not args.args:
                 print(json.dumps({"error": "workspace required"}))
@@ -566,41 +664,68 @@ if __name__ == "__main__":
                 else:
                     wp = args.args[1] if len(args.args) > 1 else None
                     mode = args.args[2] if len(args.args) > 2 else "fill"
-                    
+
                     wm = detect_wm()
                     current_ws = get_current_workspace(wm)
-                    
+
                     if wp and os.path.isfile(wp):
                         conn = sqlite3.connect(DB_PATH)
-                        result = conn.execute("SELECT id FROM wallpapers WHERE path = ?", (wp,)).fetchone()
+                        result = conn.execute(
+                            "SELECT id FROM wallpapers WHERE path = ?", (wp,)
+                        ).fetchone()
                         if result:
                             wp_id = result[0]
                         else:
                             escaped = wp.replace("'", "''")
-                            conn.execute(f"INSERT INTO wallpapers(path) VALUES('{escaped}')")
-                            wp_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                            conn.execute(
+                                f"INSERT INTO wallpapers(path) VALUES('{escaped}')"
+                            )
+                            wp_id = conn.execute(
+                                "SELECT last_insert_rowid()"
+                            ).fetchone()[0]
                         conn.execute(
                             "INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES(?, ?, ?)",
-                            (ws, wp_id, mode)
+                            (ws, wp_id, mode),
                         )
                         conn.commit()
                         conn.close()
-                        
+
                         if ws == current_ws:
                             apply_wallpaper(wp, mode)
-                            print(json.dumps({"ok": True, "applied": True, "workspace": ws}))
+                            print(
+                                json.dumps(
+                                    {"ok": True, "applied": True, "workspace": ws}
+                                )
+                            )
                         else:
-                            print(json.dumps({"ok": True, "applied": False, "workspace": ws}))
+                            print(
+                                json.dumps(
+                                    {"ok": True, "applied": False, "workspace": ws}
+                                )
+                            )
                     else:
                         # No path = apply from DB
                         wp = get_wallpaper_for_workspace(ws)
                         mode = get_mode_for_workspace(ws)
                         if wp:
                             apply_wallpaper(wp, mode)
-                            print(json.dumps({"ok": True, "applied": True, "workspace": ws}))
+                            print(
+                                json.dumps(
+                                    {"ok": True, "applied": True, "workspace": ws}
+                                )
+                            )
                         else:
-                            print(json.dumps({"ok": True, "applied": False, "workspace": ws, "error": "no wallpaper"}))
-    
+                            print(
+                                json.dumps(
+                                    {
+                                        "ok": True,
+                                        "applied": False,
+                                        "workspace": ws,
+                                        "error": "no wallpaper",
+                                    }
+                                )
+                            )
+
     elif args.daemon:
         # Check if already running
         if os.path.exists(PID_FILE):
@@ -612,9 +737,9 @@ if __name__ == "__main__":
                 sys.exit(0)
             except OSError:
                 pass
-        
+
         run_daemon()
-    
+
     else:
         parser.print_help()
         sys.exit(1)
