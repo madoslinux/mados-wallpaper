@@ -25,7 +25,9 @@ def scan_wallpaper_dirs(dirs: list[str]) -> list[Wallpaper]:
                 path = os.path.join(root, filename)
                 ext = Path(filename).suffix.lower()
                 if ext in SUPPORTED_EXTENSIONS:
-                    wallpapers.append(Wallpaper(path=path, filename=filename, width=0, height=0))
+                    wallpapers.append(
+                        Wallpaper(path=path, filename=filename, width=0, height=0)
+                    )
     return wallpapers
 
 
@@ -71,7 +73,9 @@ def set_hyprland_wallpaper(image_path: str, monitor: str = "") -> bool:
 def detect_compositor() -> str | None:
     import subprocess
 
-    compositor = os.environ.get("SWAYSOCK") or os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    compositor = os.environ.get("SWAYSOCK") or os.environ.get(
+        "HYPRLAND_INSTANCE_SIGNATURE"
+    )
     if compositor:
         if "SWAYSOCK" in os.environ:
             return "sway"

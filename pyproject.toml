@@ -13,3 +13,9 @@ dependencies = [
 
 [project.scripts]
 mados-wallpaper = "mados_wallpaper.__main__:main"
+
+[tool.ruff.lint]
+ignore = ["E402", "F823"]
+
+[tool.ruff.format]
+quote-style = "double"

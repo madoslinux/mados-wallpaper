@@ -18,15 +18,19 @@ def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""CREATE TABLE IF NOT EXISTS wallpapers (
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS wallpapers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         path TEXT UNIQUE NOT NULL
-    )""")
-    conn.execute("""CREATE TABLE IF NOT EXISTS assignments (
+    )"""
+    )
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS assignments (
         workspace INTEGER PRIMARY KEY,
         wallpaper_id INTEGER NOT NULL REFERENCES wallpapers(id),
         mode TEXT DEFAULT 'fill'
-    )""")
+    )"""
+    )
     if not _column_exists(conn, "assignments", "mode"):
         conn.execute("ALTER TABLE assignments ADD COLUMN mode TEXT DEFAULT 'fill'")
     conn.commit()
@@ -60,7 +64,11 @@ def get_all_wallpapers() -> list[dict[str, Any]]:
     wallpapers = []
     for row in conn.execute("SELECT id, path FROM wallpapers ORDER BY path"):
         wallpapers.append(
-            {"id": row["id"], "path": row["path"], "filename": os.path.basename(row["path"])}
+            {
+                "id": row["id"],
+                "path": row["path"],
+                "filename": os.path.basename(row["path"]),
+            }
         )
     conn.close()
     return wallpapers
@@ -75,7 +83,10 @@ def get_assignments() -> dict[int, dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     assignments = {}
     for row in conn.execute("SELECT workspace, wallpaper_id, mode FROM assignments"):
-        assignments[row["workspace"]] = {"wallpaper_id": row["wallpaper_id"], "mode": row["mode"]}
+        assignments[row["workspace"]] = {
+            "wallpaper_id": row["wallpaper_id"],
+            "mode": row["mode"],
+        }
     conn.close()
     return assignments
 
@@ -84,7 +95,9 @@ def assign_wallpaper(workspace: int, wallpaper_id: int, mode: str = "fill") -> N
     """Assign wallpaper via daemon HTTP API."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT path FROM wallpapers WHERE id = ?", (wallpaper_id,)).fetchone()
+    row = conn.execute(
+        "SELECT path FROM wallpapers WHERE id = ?", (wallpaper_id,)
+    ).fetchone()
 
     if not row:
         conn.close()
@@ -114,11 +127,17 @@ def get_wallpaper_by_id(wallpaper_id: int) -> dict[str, Any] | None:
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT id, path FROM wallpapers WHERE id = ?", (wallpaper_id,)).fetchone()
+    row = conn.execute(
+        "SELECT id, path FROM wallpapers WHERE id = ?", (wallpaper_id,)
+    ).fetchone()
     conn.close()
 
     if row:
-        return {"id": row["id"], "path": row["path"], "filename": os.path.basename(row["path"])}
+        return {
+            "id": row["id"],
+            "path": row["path"],
+            "filename": os.path.basename(row["path"]),
+        }
     return None
 
 

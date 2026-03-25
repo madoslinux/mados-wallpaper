@@ -23,7 +23,12 @@ def _request(method: str, path: str, data: dict | None = None) -> dict[str, Any]
 
         with urllib.request.urlopen(req, timeout=5) as response:
             return json.loads(response.read().decode())
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError):
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        TimeoutError,
+    ):
         return None
 
 
@@ -54,6 +59,8 @@ def get_wallpaper(workspace: int) -> dict[str, Any] | None:
     return result
 
 
-def set_wallpaper(workspace: int, path: str, mode: str = "fill") -> dict[str, Any] | None:
+def set_wallpaper(
+    workspace: int, path: str, mode: str = "fill"
+) -> dict[str, Any] | None:
     """Set wallpaper for workspace via daemon."""
     return _request("POST", f"/wallpaper/{workspace}", {"path": path, "mode": mode})
