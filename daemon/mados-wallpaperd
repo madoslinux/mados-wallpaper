@@ -289,32 +289,54 @@ def apply_wallpaper(wp, mode="fill"):
 
 def watch_workspace_hyprland():
     log("Starting Hyprland workspace watcher")
+    import socket
+
     while True:
         try:
-            proc = subprocess.Popen(
-                ["hyprctl", "subscribe", "workspace"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
+            socket_path = os.environ.get(
+                "HYPRLAND_INSTANCE_SIGNATURE",
+                os.path.join(
+                    os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
+                    "hypr",
+                    os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", ""),
+                    ".socket2.sock",
+                ),
             )
+            if not socket_path or not os.path.exists(socket_path):
+                socket_path = f"/tmp/hypr/{os.environ.get('HYPRLAND_INSTANCE_SIGNATURE', '')}/.socket2.sock"
+
+            if not os.path.exists(socket_path):
+                log(f"Hyprland socket not found: {socket_path}")
+                time.sleep(2)
+                continue
+
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect(socket_path)
+            s.sendall(b"subscribe workspace\n")
+            s.settimeout(1)
             log("Hyprland subscription started")
             last_ws = None
-            for line in proc.stdout:
-                if not line or not line.strip():
-                    continue
-                if "workspace" not in line.lower():
-                    continue
+
+            buffer = ""
+            while True:
                 try:
-                    parts = line.strip().split()
-                    for i, part in enumerate(parts):
-                        if part.startswith("workspace") or (
-                            i > 0 and parts[i - 1] == "workspace"
-                        ):
-                            ws_str = parts[-1].split(">>")[-1].strip()
-                            try:
-                                ws = int(ws_str)
-                            except ValueError:
-                                ws = int(ws_str.split(":")[-1]) if ":" in ws_str else 1
+                    data = s.recv(4096).decode()
+                    if not data:
+                        break
+                    buffer += data
+                    while "\n" in buffer:
+                        line, buffer = buffer.split("\n", 1)
+                        line = line.strip()
+                        if not line or "workspace" not in line.lower():
+                            continue
+                        try:
+                            ws_str = (
+                                line.split(">>")[1].strip()
+                                if ">>" in line
+                                else line.split()[-1]
+                            )
+                            ws_str = ws_str.split("<<")[0].strip()
+                            ws = int(ws_str)
                             if ws != last_ws:
                                 log(f"Hyprland workspace changed: {last_ws} -> {ws}")
                                 wp = get_wallpaper_for_workspace(ws)
@@ -322,11 +344,12 @@ def watch_workspace_hyprland():
                                 if wp:
                                     apply_wallpaper(wp, mode)
                                 last_ws = ws
-                            break
-                except Exception as e:
-                    log(f"Hyprland event error: {e}")
-            log("Hyprland subscription ended, reconnecting...")
-            proc.wait()
+                        except (ValueError, IndexError) as e:
+                            log(f"Hyprland parse error: {e} on line: {line}")
+                except socket.timeout:
+                    continue
+            s.close()
+            log("Hyprland socket closed, reconnecting...")
         except Exception as e:
             log(f"Hyprland watcher error: {e}")
         time.sleep(1)
