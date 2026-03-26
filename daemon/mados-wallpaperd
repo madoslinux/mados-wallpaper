@@ -282,23 +282,22 @@ def watch_workspace_hyprland():
 
     while True:
         try:
-            socket_path = os.environ.get(
-                "HYPRLAND_INSTANCE_SIGNATURE",
-                os.path.join(
-                    os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
-                    "hypr",
-                    os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", ""),
-                    ".socket2.sock",
-                ),
-            )
-            if not socket_path or not os.path.exists(socket_path):
-                socket_path = f"/tmp/hypr/{os.environ.get('HYPRLAND_INSTANCE_SIGNATURE', '')}/.socket2.sock"
+            instance_sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+            xdg_runtime = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+
+            if instance_sig:
+                socket_path = f"{xdg_runtime}/hypr/{instance_sig}/.socket2.sock"
+            else:
+                socket_path = f"{xdg_runtime}/hypr/.socket2.sock"
+
+            log("Looking for Hyprland socket at: " + socket_path)
 
             if not os.path.exists(socket_path):
-                log(f"Hyprland socket not found: {socket_path}")
+                log("Hyprland socket not found, trying hyprctl fallback...")
                 time.sleep(2)
                 continue
 
+            log("Connecting to Hyprland socket...")
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.connect(socket_path)
             s.sendall(b"subscribe workspace\n")
@@ -311,11 +310,13 @@ def watch_workspace_hyprland():
                 try:
                     data = s.recv(4096).decode()
                     if not data:
+                        log("Hyprland socket disconnected")
                         break
                     buffer += data
                     while "\n" in buffer:
                         line, buffer = buffer.split("\n", 1)
                         line = line.strip()
+                        log(f"Hyprland event: {line}")
                         if not line or "workspace" not in line.lower():
                             continue
                         try:
