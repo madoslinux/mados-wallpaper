@@ -231,8 +231,10 @@ def apply_wallpaper(wp, mode="fill"):
     try:
         result = subprocess.run(["swww", "query"], capture_output=True, timeout=2)
         swww_running = result.returncode == 0
-    except Exception:
+        log(f"swww query result: returncode={result.returncode}, stdout={result.stdout.strip()}")
+    except Exception as e:
         swww_running = False
+        log(f"swww query error: {e}")
 
     if not swww_running:
         log("Starting swww-daemon in background...")
@@ -245,7 +247,7 @@ def apply_wallpaper(wp, mode="fill"):
 
     if swww_running:
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [
                     "swww",
                     "img",
@@ -258,12 +260,16 @@ def apply_wallpaper(wp, mode="fill"):
                 capture_output=True,
                 timeout=10,
             )
-            log("Wallpaper applied via swww")
-            return True
+            if result.returncode == 0:
+                log("Wallpaper applied via swww")
+                return True
+            else:
+                log(f"swww img failed: returncode={result.returncode}, stderr={result.stderr.decode() if result.stderr else ''}")
         except Exception as e:
             log(f"swww error: {e}")
 
     # Fallback to swaybg
+    log("Falling back to swaybg")
     try:
         subprocess.run(["pkill", "-f", "swaybg.*-i"], capture_output=True)
         subprocess.Popen(["swaybg", "-i", wp, "-m", mode])
