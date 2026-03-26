@@ -20,10 +20,21 @@ DB_PATH = os.path.join(DATA_DIR, "wallpapers.db")
 SYSTEM_WALLPAPERS = "/usr/share/backgrounds"
 PID_FILE = os.path.join(DATA_DIR, "mados-wallpaperd.pid")
 PORT = 18765  # Non-privileged port on localhost
+LOG_FILE = "/var/log/mados-wallpaperd.log"
 
 
 def log(msg):
-    print(f"[mados-wallpaperd] {msg}", file=sys.stderr, flush=True)
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    formatted = f"[mados-wallpaperd] [{timestamp}] {msg}"
+    
+    # Try to write to /var/log
+    try:
+        os.makedirs("/var/log", exist_ok=True)
+        with open(LOG_FILE, "a") as f:
+            print(formatted, file=f, flush=True)
+    except (PermissionError, IOError):
+        # Fallback to stderr if can't write to /var/log
+        print(formatted, file=sys.stderr, flush=True)
 
 
 def init_db():
