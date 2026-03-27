@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 mados-wallpaper = "mados_wallpaper.__main__:main"
+mados-wallpaperd = "mados_wallpaper.daemon.mados_wallpaperd"
 
 [tool.ruff.lint]
 ignore = ["E402", "F823"]
