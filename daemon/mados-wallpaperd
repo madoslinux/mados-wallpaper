@@ -27,14 +27,16 @@ def log(msg):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[mados-wallpaperd] [{timestamp}] {msg}"
     
+    # Always print to stderr as backup
+    print(formatted, file=sys.stderr, flush=True)
+    
     # Try to write to /var/log
     try:
         os.makedirs("/var/log", exist_ok=True)
         with open(LOG_FILE, "a") as f:
             print(formatted, file=f, flush=True)
     except (PermissionError, IOError):
-        # Fallback to stderr if can't write to /var/log
-        print(formatted, file=sys.stderr, flush=True)
+        pass
 
 
 def init_db():
