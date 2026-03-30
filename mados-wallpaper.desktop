@@ -1,10 +1,12 @@
 [Desktop Entry]
 Name=madOS Wallpaper
-Comment=Manage wallpapers for each workspace
-Exec=mados-wallpaper
-Icon=preferences-desktop-display-color
+Comment=Wallpaper manager for each workspace
+Exec=/usr/local/bin/mados-wallpaper
+Icon=preferences-desktop-wallpaper
 Terminal=false
 Type=Application
 Categories=Settings;DesktopSettings;
+MimeType=image/png;image/jpeg;
 Keywords=wallpaper;workspace;desktop;
+StartupWMClass=mados-wallpaper
 StartupNotify=true
