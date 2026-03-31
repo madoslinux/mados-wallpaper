@@ -620,7 +620,7 @@ def run_daemon():
     server.serve_forever()
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="mados-wallpaperd")
@@ -762,3 +762,7 @@ if __name__ == "__main__":
     else:
         parser.print_help()
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

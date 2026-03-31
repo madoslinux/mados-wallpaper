@@ -1,0 +1,1 @@
+"""mados-wallpaperd daemon package."""
