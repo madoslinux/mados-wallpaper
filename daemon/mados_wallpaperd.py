@@ -21,8 +21,8 @@ SYSTEM_WALLPAPERS = "/usr/share/backgrounds"
 PID_FILE = os.path.join(DATA_DIR, "mados-wallpaperd.pid")
 PORT = 18765  # Non-privileged port on localhost
 LOG_FILE = "/var/log/mados-wallpaperd.log"
-TRANSITION_TYPE = os.environ.get("MADOS_WALLPAPER_TRANSITION", "fade")
-TRANSITION_DURATION = os.environ.get("MADOS_WALLPAPER_TRANSITION_DURATION", "0.8")
+TRANSITION_TYPE = os.environ.get("MADOS_WALLPAPER_TRANSITION", "wipe")
+TRANSITION_DURATION = os.environ.get("MADOS_WALLPAPER_TRANSITION_DURATION", "2.0")
 
 
 def log(msg):
