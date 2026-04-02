@@ -28,10 +28,10 @@ TRANSITION_DURATION = os.environ.get("MADOS_WALLPAPER_TRANSITION_DURATION", "0.8
 def log(msg):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     formatted = f"[mados-wallpaperd] [{timestamp}] {msg}"
-    
+
     # Always print to stderr as backup
     print(formatted, file=sys.stderr, flush=True)
-    
+
     # Try to write to /var/log
     try:
         os.makedirs("/var/log", exist_ok=True)
@@ -250,10 +250,10 @@ def get_current_workspace(wm):
             )
             if result.returncode == 0 and result.stdout.strip():
                 payload = json.loads(result.stdout)
-                ws_index = parse_workspace_index(payload.get("id"))
+                ws_index = parse_workspace_index(payload.get("name"))
                 if ws_index is not None:
                     return ws_index
-                ws_index = parse_workspace_index(payload.get("name"))
+                ws_index = parse_workspace_index(payload.get("id"))
                 if ws_index is not None:
                     return ws_index
 
@@ -322,7 +322,9 @@ def apply_wallpaper(wp, mode="fill"):
     try:
         result = subprocess.run(["swww", "query"], capture_output=True, timeout=2)
         swww_running = result.returncode == 0
-        log(f"swww query result: returncode={result.returncode}, stdout={result.stdout.strip()}")
+        log(
+            f"swww query result: returncode={result.returncode}, stdout={result.stdout.strip()}"
+        )
     except Exception as e:
         swww_running = False
         log(f"swww query error: {e}")
@@ -337,7 +339,9 @@ def apply_wallpaper(wp, mode="fill"):
                 start_new_session=True,
             )
             for _ in range(10):
-                result = subprocess.run(["swww", "query"], capture_output=True, timeout=1)
+                result = subprocess.run(
+                    ["swww", "query"], capture_output=True, timeout=1
+                )
                 if result.returncode == 0:
                     swww_running = True
                     break
@@ -364,7 +368,9 @@ def apply_wallpaper(wp, mode="fill"):
                 log("Wallpaper applied via swww")
                 return True
             else:
-                log(f"swww img failed: returncode={result.returncode}, stderr={result.stderr.decode() if result.stderr else ''}")
+                log(
+                    f"swww img failed: returncode={result.returncode}, stderr={result.stderr.decode() if result.stderr else ''}"
+                )
         except Exception as e:
             log(f"swww error: {e}")
 
@@ -409,7 +415,7 @@ def watch_workspace_hyprland():
             s.sendall(b"subscribe workspace\n")
             s.settimeout(1)
             log("Hyprland subscription started")
-            last_ws = None
+            last_ws = get_current_workspace("hyprland")
 
             buffer = ""
             while True:
@@ -423,17 +429,15 @@ def watch_workspace_hyprland():
                         line, buffer = buffer.split("\n", 1)
                         line = line.strip()
                         log(f"Hyprland event: {line}")
-                        if not line or "workspace" not in line.lower():
+                        lowered = line.lower()
+                        if not line or (
+                            "workspace" not in lowered
+                            and "focusedmon" not in lowered
+                            and "focusedmonv2" not in lowered
+                        ):
                             continue
                         try:
-                            if ">>" in line:
-                                payload = line.split(">>", 1)[1].strip()
-                            else:
-                                payload = line.split()[-1].strip()
-                            ws_token = payload.split(",", 1)[0].strip()
-                            ws = parse_workspace_index(ws_token)
-                            if ws is None:
-                                ws = parse_workspace_index(payload)
+                            ws = get_current_workspace("hyprland")
                             if ws is None:
                                 continue
                             if ws != last_ws:
@@ -528,6 +532,9 @@ def watch_workspace_sway():
                 text=True,
             )
             log("Sway subscription started")
+            if proc.stdout is None:
+                proc.wait(timeout=1)
+                continue
             for line in proc.stdout:
                 if not line or not line.strip():
                     continue

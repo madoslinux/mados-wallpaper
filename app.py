@@ -185,10 +185,10 @@ class WallpaperApp(Gtk.Application):
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     payload = json.loads(result.stdout)
-                    ws_index = self._parse_workspace_index(payload.get("id"))
+                    ws_index = self._parse_workspace_index(payload.get("name"))
                     if ws_index is not None:
                         return ws_index
-                    ws_index = self._parse_workspace_index(payload.get("name"))
+                    ws_index = self._parse_workspace_index(payload.get("id"))
                     if ws_index is not None:
                         return ws_index
 
