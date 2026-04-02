@@ -21,6 +21,8 @@ SYSTEM_WALLPAPERS = "/usr/share/backgrounds"
 PID_FILE = os.path.join(DATA_DIR, "mados-wallpaperd.pid")
 PORT = 18765  # Non-privileged port on localhost
 LOG_FILE = "/var/log/mados-wallpaperd.log"
+TRANSITION_TYPE = os.environ.get("MADOS_WALLPAPER_TRANSITION", "fade")
+TRANSITION_DURATION = os.environ.get("MADOS_WALLPAPER_TRANSITION_DURATION", "0.8")
 
 
 def log(msg):
@@ -156,6 +158,75 @@ def detect_wm():
     return "unknown"
 
 
+def parse_workspace_index(value):
+    if value is None:
+        return None
+    try:
+        ws = int(value)
+        return ws if ws > 0 else None
+    except (TypeError, ValueError):
+        pass
+
+    text = str(value).strip()
+    match = re.match(r"^(\d+)", text)
+    if match:
+        return int(match.group(1))
+
+    match = re.match(r"^name:(\d+)", text)
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+def extract_sway_workspace_index(workspace):
+    ws_num = parse_workspace_index(workspace.get("num"))
+    if ws_num is not None:
+        return ws_num
+    return parse_workspace_index(workspace.get("name"))
+
+
+def get_niri_workspaces():
+    socket_path = os.environ.get("NIRI_SOCKET", os.path.expanduser("~/.niri.sock"))
+    if not os.path.exists(socket_path):
+        return []
+
+    import socket
+
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(1)
+    s.connect(socket_path)
+    s.sendall(b'{"Workspaces":null}\n')
+    data = b""
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if b"\n" in data:
+            break
+    s.close()
+    resp = json.loads(data.decode())
+    return resp.get("Ok", {}).get("Workspaces", [])
+
+
+def resolve_niri_workspace_index(workspace_id):
+    try:
+        target_id = int(workspace_id)
+    except (TypeError, ValueError):
+        return None
+
+    try:
+        for ws in get_niri_workspaces():
+            if ws.get("id") == target_id:
+                idx = parse_workspace_index(ws.get("idx"))
+                if idx is not None:
+                    return idx
+    except Exception:
+        return None
+    return None
+
+
 def get_current_workspace(wm):
     try:
         if wm == "sway":
@@ -167,41 +238,48 @@ def get_current_workspace(wm):
             )
             for ws in json.loads(result.stdout):
                 if ws.get("focused"):
-                    return ws.get("num", 1)
+                    ws_index = extract_sway_workspace_index(ws)
+                    if ws_index is not None:
+                        return ws_index
         elif wm == "hyprland":
+            result = subprocess.run(
+                ["hyprctl", "-j", "activeworkspace"],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                payload = json.loads(result.stdout)
+                ws_index = parse_workspace_index(payload.get("id"))
+                if ws_index is not None:
+                    return ws_index
+                ws_index = parse_workspace_index(payload.get("name"))
+                if ws_index is not None:
+                    return ws_index
+
             result = subprocess.run(
                 ["hyprctl", "activeworkspace"],
                 capture_output=True,
                 text=True,
                 timeout=1,
             )
-            match = re.search(r"workspace ID (\d+)", result.stdout)
+            match = re.search(r"workspace\s+ID\s+(-?\d+)", result.stdout)
             if match:
-                return int(match.group(1))
-        elif wm == "niri":
-            socket_path = os.environ.get(
-                "NIRI_SOCKET", os.path.expanduser("~/.niri.sock")
-            )
-            if os.path.exists(socket_path):
-                import socket
+                ws_index = parse_workspace_index(match.group(1))
+                if ws_index is not None:
+                    return ws_index
 
-                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                s.settimeout(1)
-                s.connect(socket_path)
-                s.sendall(b'{"Workspaces":null}\n')
-                data = b""
-                while True:
-                    chunk = s.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
-                    if b"\n" in data:
-                        break
-                s.close()
-                resp = json.loads(data.decode())
-                for ws in resp.get("Ok", {}).get("Workspaces", []):
-                    if ws.get("is_focused"):
-                        return ws.get("id", 1)
+            match = re.search(r"workspace\s+([^\n]+)", result.stdout)
+            if match:
+                ws_index = parse_workspace_index(match.group(1).strip())
+                if ws_index is not None:
+                    return ws_index
+        elif wm == "niri":
+            for ws in get_niri_workspaces():
+                if ws.get("is_focused"):
+                    ws_index = parse_workspace_index(ws.get("idx"))
+                    if ws_index is not None:
+                        return ws_index
     except Exception as e:
         log(f"Error getting workspace: {e}")
     return 1
@@ -251,12 +329,21 @@ def apply_wallpaper(wp, mode="fill"):
 
     if not swww_running:
         log("Starting swww-daemon in background...")
-        subprocess.Popen(
-            ["nohup", "swww-daemon", "&"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        try:
+            subprocess.Popen(
+                ["swww-daemon"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            for _ in range(10):
+                result = subprocess.run(["swww", "query"], capture_output=True, timeout=1)
+                if result.returncode == 0:
+                    swww_running = True
+                    break
+                time.sleep(0.2)
+        except Exception as e:
+            log(f"swww-daemon start error: {e}")
 
     if swww_running:
         try:
@@ -266,9 +353,9 @@ def apply_wallpaper(wp, mode="fill"):
                     "img",
                     wp,
                     "--transition-type",
-                    "any",
+                    TRANSITION_TYPE,
                     "--transition-duration",
-                    "1",
+                    TRANSITION_DURATION,
                 ],
                 capture_output=True,
                 timeout=10,
@@ -339,13 +426,16 @@ def watch_workspace_hyprland():
                         if not line or "workspace" not in line.lower():
                             continue
                         try:
-                            ws_str = (
-                                line.split(">>")[1].strip()
-                                if ">>" in line
-                                else line.split()[-1]
-                            )
-                            ws_str = ws_str.split("<<")[0].strip()
-                            ws = int(ws_str)
+                            if ">>" in line:
+                                payload = line.split(">>", 1)[1].strip()
+                            else:
+                                payload = line.split()[-1].strip()
+                            ws_token = payload.split(",", 1)[0].strip()
+                            ws = parse_workspace_index(ws_token)
+                            if ws is None:
+                                ws = parse_workspace_index(payload)
+                            if ws is None:
+                                continue
                             if ws != last_ws:
                                 log(f"Hyprland workspace changed: {last_ws} -> {ws}")
                                 wp = get_wallpaper_for_workspace(ws)
@@ -400,7 +490,14 @@ def watch_workspace_niri():
                                 resp = json.loads(line)
                                 event = resp.get("Event", {})
                                 if "WorkspaceFocused" in event:
-                                    ws = event["WorkspaceFocused"].get("id", 1)
+                                    focus_event = event["WorkspaceFocused"]
+                                    ws = parse_workspace_index(focus_event.get("idx"))
+                                    if ws is None:
+                                        ws = resolve_niri_workspace_index(
+                                            focus_event.get("id")
+                                        )
+                                    if ws is None:
+                                        continue
                                     if ws != last_ws:
                                         log(
                                             f"Niri workspace changed: {last_ws} -> {ws}"
@@ -436,7 +533,7 @@ def watch_workspace_sway():
                     continue
                 try:
                     event = json.loads(line)
-                    ws = event.get("current", {}).get("num")
+                    ws = extract_sway_workspace_index(event.get("current", {}))
                     if ws:
                         log(f"Sway workspace event: {ws}")
                         wp = get_wallpaper_for_workspace(ws)

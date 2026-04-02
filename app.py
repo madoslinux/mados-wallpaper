@@ -2,6 +2,7 @@
 
 import os
 import json
+import re
 import sys
 import time
 import traceback
@@ -42,6 +43,77 @@ class WallpaperApp(Gtk.Application):
         self._workspace_watcher = None
         self._load_state()
 
+    @staticmethod
+    def _parse_workspace_index(value) -> int | None:
+        if value is None:
+            return None
+
+        try:
+            ws = int(value)
+            return ws if ws > 0 else None
+        except (TypeError, ValueError):
+            pass
+
+        text = str(value).strip()
+        for token in (text, text.split(":", 1)[0]):
+            if token.isdigit():
+                return int(token)
+
+        number = ""
+        for char in text:
+            if char.isdigit():
+                number += char
+            else:
+                break
+        if number:
+            return int(number)
+        return None
+
+    def _extract_sway_workspace_index(self, workspace: dict) -> int | None:
+        ws_num = self._parse_workspace_index(workspace.get("num"))
+        if ws_num is not None:
+            return ws_num
+        return self._parse_workspace_index(workspace.get("name"))
+
+    def _get_niri_workspaces(self) -> list[dict]:
+        import socket
+
+        socket_path = os.environ.get("NIRI_SOCKET", os.path.expanduser("~/.niri.sock"))
+        if not os.path.exists(socket_path):
+            return []
+
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(1)
+        s.connect(socket_path)
+        s.sendall(b'{"Workspaces":null}\n')
+        data = b""
+        while True:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+            if b"\n" in data:
+                break
+        s.close()
+        resp = json.loads(data.decode())
+        return resp.get("Ok", {}).get("Workspaces", [])
+
+    def _resolve_niri_workspace_index(self, workspace_id) -> int | None:
+        try:
+            target_id = int(workspace_id)
+        except (TypeError, ValueError):
+            return None
+
+        try:
+            for ws in self._get_niri_workspaces():
+                if ws.get("id") == target_id:
+                    idx = self._parse_workspace_index(ws.get("idx"))
+                    if idx is not None:
+                        return idx
+        except Exception:
+            return None
+        return None
+
     def _on_activate(self, app):
         try:
             from gi.repository import GLib
@@ -80,23 +152,11 @@ class WallpaperApp(Gtk.Application):
                     "NIRI_SOCKET", os.path.expanduser("~/.niri.sock")
                 )
                 if os.path.exists(socket_path):
-                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    s.settimeout(1)
-                    s.connect(socket_path)
-                    s.sendall(b'{"Workspaces":null}\n')
-                    data = b""
-                    while True:
-                        chunk = s.recv(4096)
-                        if not chunk:
-                            break
-                        data += chunk
-                        if b"\n" in data:
-                            break
-                    s.close()
-                    resp = json.loads(data.decode())
-                    for ws in resp.get("Ok", {}).get("Workspaces", []):
+                    for ws in self._get_niri_workspaces():
                         if ws.get("is_focused"):
-                            return ws.get("id", 1)
+                            ws_index = self._parse_workspace_index(ws.get("idx"))
+                            if ws_index is not None:
+                                return ws_index
             except Exception:
                 pass
         elif "sway" in desktop:
@@ -107,31 +167,48 @@ class WallpaperApp(Gtk.Application):
                     text=True,
                     timeout=1,
                 )
-                import json
-
                 workspaces = json.loads(result.stdout)
                 for ws in workspaces:
                     if ws.get("focused"):
-                        return ws.get("num", 1)
+                        ws_index = self._extract_sway_workspace_index(ws)
+                        if ws_index is not None:
+                            return ws_index
             except Exception:
                 pass
         elif "hyprland" in desktop:
             try:
+                result = subprocess.run(
+                    ["hyprctl", "-j", "activeworkspace"],
+                    capture_output=True,
+                    text=True,
+                    timeout=1,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    payload = json.loads(result.stdout)
+                    ws_index = self._parse_workspace_index(payload.get("id"))
+                    if ws_index is not None:
+                        return ws_index
+                    ws_index = self._parse_workspace_index(payload.get("name"))
+                    if ws_index is not None:
+                        return ws_index
+
                 result = subprocess.run(
                     ["hyprctl", "activeworkspace"],
                     capture_output=True,
                     text=True,
                     timeout=1,
                 )
-                for line in result.stdout.split("\n"):
-                    if "workspace" in line:
-                        parts = line.split()
-                        for i, part in enumerate(parts):
-                            if part == "workspace" and i + 1 < len(parts):
-                                ws = parts[i + 1]
-                                if "(" in ws and ")" in ws:
-                                    return int(ws.split("(")[1].split(")")[0])
-                                return int(ws)
+                match = re.search(r"workspace\s+ID\s+(-?\d+)", result.stdout)
+                if match:
+                    ws_index = self._parse_workspace_index(match.group(1))
+                    if ws_index is not None:
+                        return ws_index
+
+                match = re.search(r"workspace\s+([^\n]+)", result.stdout)
+                if match:
+                    ws_index = self._parse_workspace_index(match.group(1).strip())
+                    if ws_index is not None:
+                        return ws_index
             except Exception:
                 pass
         return 1
@@ -160,15 +237,19 @@ class WallpaperApp(Gtk.Application):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            import json
-
+            if process.stdout is None:
+                return
             for line in process.stdout:
                 if not line.strip():
                     continue
                 try:
                     event = json.loads(line)
                     if event.get("change") == "focus":
-                        new_ws = event.get("current", {}).get("num", 1)
+                        new_ws = self._extract_sway_workspace_index(
+                            event.get("current", {})
+                        )
+                        if new_ws is None:
+                            continue
                         if new_ws != self._current_workspace:
                             self._current_workspace = new_ws
                             GLib.idle_add(self._on_workspace_changed, new_ws)
@@ -185,26 +266,25 @@ class WallpaperApp(Gtk.Application):
                 stderr=subprocess.PIPE,
                 text=True,
             )
+            if process.stdout is None:
+                return
             for line in process.stdout:
                 if not line.strip() or "workspace" not in line.lower():
                     continue
                 try:
-                    parts = line.strip().split()
-                    for i, part in enumerate(parts):
-                        if part.startswith("workspace") or (
-                            i > 0 and parts[i - 1] == "workspace"
-                        ):
-                            ws_str = parts[-1].split(">>")[-1].strip()
-                            try:
-                                new_ws = int(ws_str)
-                            except ValueError:
-                                new_ws = (
-                                    int(ws_str.split(":")[-1]) if ":" in ws_str else 1
-                                )
-                            if new_ws != self._current_workspace:
-                                self._current_workspace = new_ws
-                                GLib.idle_add(self._on_workspace_changed, new_ws)
-                            break
+                    if ">>" in line:
+                        payload = line.split(">>", 1)[1].strip()
+                    else:
+                        payload = line.strip().split()[-1]
+                    ws_token = payload.split(",", 1)[0].strip()
+                    new_ws = self._parse_workspace_index(ws_token)
+                    if new_ws is None:
+                        new_ws = self._parse_workspace_index(payload)
+                    if new_ws is None:
+                        continue
+                    if new_ws != self._current_workspace:
+                        self._current_workspace = new_ws
+                        GLib.idle_add(self._on_workspace_changed, new_ws)
                 except Exception:
                     continue
         except Exception as e:
@@ -245,7 +325,14 @@ class WallpaperApp(Gtk.Application):
                             resp = json.loads(line)
                             event = resp.get("Event", {})
                             if "WorkspaceFocused" in event:
-                                ws = event["WorkspaceFocused"].get("id", 1)
+                                focus_event = event["WorkspaceFocused"]
+                                ws = self._parse_workspace_index(focus_event.get("idx"))
+                                if ws is None:
+                                    ws = self._resolve_niri_workspace_index(
+                                        focus_event.get("id")
+                                    )
+                                if ws is None:
+                                    continue
                                 if ws != last_ws:
                                     self._current_workspace = ws
                                     GLib.idle_add(self._on_workspace_changed, ws)
