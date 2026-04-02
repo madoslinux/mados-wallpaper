@@ -15,6 +15,10 @@ dependencies = [
 mados-wallpaper = "mados_wallpaper.__main__:main"
 mados-wallpaperd = "mados_wallpaper.daemon.mados_wallpaperd"
 
+[tool.setuptools.data-files]
+"share/applications" = ["mados-wallpaper.desktop"]
+"share/icons/hicolor/scalable/apps" = ["mados-wallpaper.svg"]
+
 [tool.ruff.lint]
 ignore = ["E402", "F823"]
 
