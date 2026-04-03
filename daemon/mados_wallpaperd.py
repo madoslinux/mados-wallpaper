@@ -332,6 +332,13 @@ def assign_random_wallpapers(max_ws=6):
 
 
 def detect_wm():
+    if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        return "hyprland"
+    if os.environ.get("SWAYSOCK"):
+        return "sway"
+    if os.environ.get("NIRI_SOCKET"):
+        return "niri"
+
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     if "niri" in desktop:
         return "niri"
@@ -370,6 +377,21 @@ def detect_wm():
     except Exception:
         pass
     return "unknown"
+
+
+def is_current_daemon_process(pid):
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            raw = f.read().decode(errors="ignore")
+    except Exception:
+        return False
+
+    cmdline = raw.replace("\x00", " ")
+    return (
+        "mados_wallpaperd.py" in cmdline
+        or "python3 -m daemon" in cmdline
+        or "-m daemon -d" in cmdline
+    )
 
 
 def parse_workspace_index(value):
@@ -1249,16 +1271,35 @@ def main():
     elif args.daemon:
         # Check if already running
         if os.path.exists(PID_FILE):
-            with open(PID_FILE) as f:
-                old_pid = int(f.read().strip())
+            old_pid = None
             try:
-                os.kill(old_pid, 0)
-                log(f"Already running (PID: {old_pid})")
-                sys.exit(0)
-            except OSError:
-                pass
+                with open(PID_FILE) as f:
+                    old_pid = int(f.read().strip())
+            except (ValueError, OSError):
+                old_pid = None
 
-        run_daemon()
+            try:
+                if old_pid is not None:
+                    os.kill(old_pid, 0)
+                    if is_current_daemon_process(old_pid):
+                        log(f"Already running (PID: {old_pid})")
+                        sys.exit(0)
+                    log(
+                        f"Ignoring stale PID file (PID {old_pid} belongs to another process)"
+                    )
+                    os.remove(PID_FILE)
+                else:
+                    if os.path.exists(PID_FILE):
+                        os.remove(PID_FILE)
+            except OSError:
+                if os.path.exists(PID_FILE):
+                    os.remove(PID_FILE)
+
+        try:
+            run_daemon()
+        except Exception as e:
+            log(f"Fatal daemon error: {e}")
+            raise
 
     else:
         parser.print_help()
