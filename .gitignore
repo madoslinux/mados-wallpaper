@@ -37,3 +37,6 @@ ENV/
 *~
 
 .state.json
+
+renderer/target/
+renderer/Cargo.lock

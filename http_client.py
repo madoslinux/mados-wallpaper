@@ -60,7 +60,22 @@ def get_wallpaper(workspace: int) -> dict[str, Any] | None:
 
 
 def set_wallpaper(
-    workspace: int, path: str, mode: str = "fill"
+    workspace: int,
+    path: str,
+    mode: str = "fill",
+    transition_type: str = "wipe",
+    transition_duration: float = 2.0,
+    shader_preset: str = "none",
 ) -> dict[str, Any] | None:
     """Set wallpaper for workspace via daemon."""
-    return _request("POST", f"/wallpaper/{workspace}", {"path": path, "mode": mode})
+    return _request(
+        "POST",
+        f"/wallpaper/{workspace}",
+        {
+            "path": path,
+            "mode": mode,
+            "transition_type": transition_type,
+            "transition_duration": transition_duration,
+            "shader_preset": shader_preset,
+        },
+    )

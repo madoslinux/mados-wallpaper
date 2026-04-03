@@ -1,0 +1,19 @@
+[package]
+name = "mados-wallpaper-renderer"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+wayland_gl = [
+    "dep:wayland-client",
+    "dep:wayland-protocols-wlr",
+]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
+image = { version = "0.25", default-features = true }
+libloading = "0.8"

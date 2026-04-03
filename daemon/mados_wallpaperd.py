@@ -12,6 +12,7 @@ import subprocess
 import threading
 import re
 import time
+import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
@@ -23,6 +24,162 @@ PORT = 18765  # Non-privileged port on localhost
 LOG_FILE = "/var/log/mados-wallpaperd.log"
 TRANSITION_TYPE = os.environ.get("MADOS_WALLPAPER_TRANSITION", "wipe")
 TRANSITION_DURATION = os.environ.get("MADOS_WALLPAPER_TRANSITION_DURATION", "2.0")
+SHADER_PRESET = os.environ.get("MADOS_WALLPAPER_SHADER_PRESET", "none")
+RENDERER_BIN = os.environ.get(
+    "MADOS_WALLPAPER_RENDERER_BIN", "mados-wallpaper-renderer"
+)
+REPO_RENDERER_BIN = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "renderer",
+        "target",
+        "release",
+        "mados-wallpaper-renderer",
+    )
+)
+REPO_RENDERER_BIN_DEBUG = os.path.abspath(
+    os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "renderer",
+        "target",
+        "debug",
+        "mados-wallpaper-renderer",
+    )
+)
+RENDERER_SOCKET = os.path.join(DATA_DIR, "renderer.sock")
+RENDERER_START_TIMEOUT = 5.0
+
+
+class InternalGlBackend:
+    def __init__(self):
+        self._renderer_process = None
+
+    def _send(self, payload, timeout=2.0):
+        if not os.path.exists(RENDERER_SOCKET):
+            return None
+
+        request = (json.dumps(payload) + "\n").encode()
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(timeout)
+                client.connect(RENDERER_SOCKET)
+                client.sendall(request)
+
+                response = b""
+                while True:
+                    chunk = client.recv(4096)
+                    if not chunk:
+                        break
+                    response += chunk
+                    if b"\n" in response:
+                        break
+        except Exception as e:
+            log(f"Renderer IPC error: {e}")
+            return None
+
+        if not response:
+            return None
+
+        try:
+            return json.loads(response.decode().strip())
+        except json.JSONDecodeError:
+            return None
+
+    def _renderer_running(self):
+        result = self._send({"cmd": "health"})
+        return bool(result and result.get("ok"))
+
+    def _start_renderer(self):
+        os.makedirs(DATA_DIR, exist_ok=True)
+        if os.path.exists(RENDERER_SOCKET):
+            try:
+                os.remove(RENDERER_SOCKET)
+            except OSError:
+                pass
+
+        renderer_cmd = self._renderer_command()
+
+        try:
+            self._renderer_process = subprocess.Popen(
+                renderer_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as e:
+            log(f"Could not start renderer command '{renderer_cmd}': {e}")
+            return False
+
+        deadline = time.time() + RENDERER_START_TIMEOUT
+        while time.time() < deadline:
+            if self._renderer_running():
+                return True
+            time.sleep(0.1)
+        return False
+
+    def ensure_ready(self):
+        if self._renderer_running():
+            return True
+        log("Renderer not reachable, starting internal renderer...")
+        return self._start_renderer()
+
+    def _renderer_command(self):
+        configured = os.environ.get("MADOS_WALLPAPER_RENDERER_BIN")
+        if configured:
+            return [configured, "--socket", RENDERER_SOCKET]
+
+        if os.path.isfile(REPO_RENDERER_BIN):
+            return [REPO_RENDERER_BIN, "--socket", RENDERER_SOCKET]
+
+        if os.path.isfile(REPO_RENDERER_BIN_DEBUG):
+            return [REPO_RENDERER_BIN_DEBUG, "--socket", RENDERER_SOCKET]
+
+        local_renderer = os.path.join(os.path.dirname(__file__), "renderer.py")
+        if os.path.isfile(local_renderer):
+            return [sys.executable, local_renderer, "--socket", RENDERER_SOCKET]
+
+        return [RENDERER_BIN, "--socket", RENDERER_SOCKET]
+
+    def apply(
+        self,
+        wallpaper_path,
+        mode,
+        workspace,
+        transition_type,
+        transition_duration,
+        shader_preset,
+    ):
+        if not self.ensure_ready():
+            log("Internal renderer unavailable")
+            return False
+
+        result = self._send(
+            {
+                "cmd": "set_wallpaper",
+                "workspace": workspace,
+                "path": wallpaper_path,
+                "mode": mode,
+                "transition": {
+                    "type": transition_type,
+                    "duration": transition_duration,
+                },
+                "shader_preset": shader_preset,
+            },
+            timeout=10.0,
+        )
+        if not result or not result.get("ok"):
+            log(f"Renderer rejected wallpaper apply: {result}")
+            return False
+        return True
+
+    def health(self):
+        result = self._send({"cmd": "health"})
+        return bool(result and result.get("ok"))
+
+
+BACKEND = InternalGlBackend()
 
 
 def log(msg):
@@ -58,15 +215,36 @@ def init_db():
         CREATE TABLE IF NOT EXISTS assignments (
             workspace INTEGER PRIMARY KEY,
             wallpaper_id INTEGER NOT NULL REFERENCES wallpapers(id),
-            mode TEXT DEFAULT 'fill'
+            mode TEXT DEFAULT 'fill',
+            transition_type TEXT DEFAULT 'wipe',
+            transition_duration REAL DEFAULT 2.0,
+            shader_preset TEXT DEFAULT 'none'
         )
     """
     )
-    # Add mode column if missing (migration)
+    # Add missing columns (migration)
     try:
         conn.execute("SELECT mode FROM assignments LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE assignments ADD COLUMN mode TEXT DEFAULT 'fill'")
+    try:
+        conn.execute("SELECT transition_type FROM assignments LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute(
+            "ALTER TABLE assignments ADD COLUMN transition_type TEXT DEFAULT 'wipe'"
+        )
+    try:
+        conn.execute("SELECT transition_duration FROM assignments LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute(
+            "ALTER TABLE assignments ADD COLUMN transition_duration REAL DEFAULT 2.0"
+        )
+    try:
+        conn.execute("SELECT shader_preset FROM assignments LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute(
+            "ALTER TABLE assignments ADD COLUMN shader_preset TEXT DEFAULT 'none'"
+        )
     conn.commit()
     conn.close()
 
@@ -128,7 +306,24 @@ def assign_random_wallpapers(max_ws=6):
     for i, ws in enumerate(range(1, max_ws + 1)):
         wp_id = shuffled[i % len(shuffled)]
         conn.execute(
-            f"INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES({ws}, {wp_id}, 'fill')"
+            """
+            INSERT OR REPLACE INTO assignments(
+                workspace,
+                wallpaper_id,
+                mode,
+                transition_type,
+                transition_duration,
+                shader_preset
+            ) VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ws,
+                wp_id,
+                "fill",
+                TRANSITION_TYPE,
+                float(TRANSITION_DURATION),
+                SHADER_PRESET,
+            ),
         )
 
     conn.commit()
@@ -311,81 +506,111 @@ def get_mode_for_workspace(ws):
         return "fill"
 
 
-def apply_wallpaper(wp, mode="fill"):
+def get_render_settings_for_workspace(ws):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        result = conn.execute(
+            """
+            SELECT mode, transition_type, transition_duration, shader_preset
+            FROM assignments
+            WHERE workspace = ?
+            """,
+            (ws,),
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        log(f"Error getting render settings: {e}")
+        result = None
+
+    if not result:
+        return {
+            "mode": "fill",
+            "transition_type": TRANSITION_TYPE,
+            "transition_duration": float(TRANSITION_DURATION),
+            "shader_preset": SHADER_PRESET,
+        }
+
+    mode = result[0] or "fill"
+    transition_type = result[1] or TRANSITION_TYPE
+    transition_duration = result[2]
+    shader_preset = result[3] or SHADER_PRESET
+    try:
+        transition_duration = float(transition_duration)
+    except (TypeError, ValueError):
+        transition_duration = float(TRANSITION_DURATION)
+
+    return {
+        "mode": mode,
+        "transition_type": transition_type,
+        "transition_duration": transition_duration,
+        "shader_preset": shader_preset,
+    }
+
+
+def upsert_assignment(
+    conn,
+    workspace,
+    wallpaper_id,
+    mode,
+    transition_type,
+    transition_duration,
+    shader_preset,
+):
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO assignments(
+            workspace,
+            wallpaper_id,
+            mode,
+            transition_type,
+            transition_duration,
+            shader_preset
+        ) VALUES(?, ?, ?, ?, ?, ?)
+        """,
+        (
+            workspace,
+            wallpaper_id,
+            mode,
+            transition_type,
+            float(transition_duration),
+            shader_preset,
+        ),
+    )
+
+
+def apply_wallpaper(
+    wp,
+    mode="fill",
+    workspace=1,
+    transition_type=TRANSITION_TYPE,
+    transition_duration=None,
+    shader_preset=SHADER_PRESET,
+):
     if not wp or not os.path.isfile(wp):
         log(f"Wallpaper not found: {wp}")
         return False
 
-    log(f"Applying wallpaper: {wp} (mode: {mode})")
+    if transition_duration is None:
+        transition_duration = float(TRANSITION_DURATION)
 
-    # Check for swww
-    try:
-        result = subprocess.run(["swww", "query"], capture_output=True, timeout=2)
-        swww_running = result.returncode == 0
-        log(
-            f"swww query result: returncode={result.returncode}, stdout={result.stdout.strip()}"
-        )
-    except Exception as e:
-        swww_running = False
-        log(f"swww query error: {e}")
+    log(
+        f"Applying wallpaper via internal renderer: {wp} "
+        f"(ws={workspace}, mode={mode}, transition={transition_type}/{transition_duration}, shader={shader_preset})"
+    )
 
-    if not swww_running:
-        log("Starting swww-daemon in background...")
-        try:
-            subprocess.Popen(
-                ["swww-daemon"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            for _ in range(10):
-                result = subprocess.run(
-                    ["swww", "query"], capture_output=True, timeout=1
-                )
-                if result.returncode == 0:
-                    swww_running = True
-                    break
-                time.sleep(0.2)
-        except Exception as e:
-            log(f"swww-daemon start error: {e}")
-
-    if swww_running:
-        try:
-            result = subprocess.run(
-                [
-                    "swww",
-                    "img",
-                    wp,
-                    "--transition-type",
-                    TRANSITION_TYPE,
-                    "--transition-duration",
-                    TRANSITION_DURATION,
-                ],
-                capture_output=True,
-                timeout=10,
-            )
-            if result.returncode == 0:
-                log("Wallpaper applied via swww")
-                return True
-            else:
-                log(
-                    f"swww img failed: returncode={result.returncode}, stderr={result.stderr.decode() if result.stderr else ''}"
-                )
-        except Exception as e:
-            log(f"swww error: {e}")
-
-    # Fallback to swaybg
-    log("Falling back to swaybg")
-    try:
-        subprocess.run(["pkill", "-f", "swaybg.*-i"], capture_output=True)
-        subprocess.Popen(["swaybg", "-i", wp, "-m", mode])
-        log("Wallpaper applied via swaybg")
-        return True
-    except Exception as e:
-        log(f"swaybg error: {e}")
-
-    log("No wallpaper setter available")
-    return False
+    ok = BACKEND.apply(
+        wp,
+        mode,
+        workspace,
+        transition_type,
+        transition_duration,
+        shader_preset,
+    )
+    if ok:
+        log("Wallpaper applied via internal renderer")
+    else:
+        log("Internal renderer apply failed")
+    return ok
 
 
 def watch_workspace_hyprland():
@@ -443,9 +668,16 @@ def watch_workspace_hyprland():
                             if ws != last_ws:
                                 log(f"Hyprland workspace changed: {last_ws} -> {ws}")
                                 wp = get_wallpaper_for_workspace(ws)
-                                mode = get_mode_for_workspace(ws)
+                                settings = get_render_settings_for_workspace(ws)
                                 if wp:
-                                    apply_wallpaper(wp, mode)
+                                    apply_wallpaper(
+                                        wp,
+                                        settings["mode"],
+                                        ws,
+                                        settings["transition_type"],
+                                        settings["transition_duration"],
+                                        settings["shader_preset"],
+                                    )
                                 last_ws = ws
                         except (ValueError, IndexError) as e:
                             log(f"Hyprland parse error: {e} on line: {line}")
@@ -507,9 +739,16 @@ def watch_workspace_niri():
                                             f"Niri workspace changed: {last_ws} -> {ws}"
                                         )
                                         wp = get_wallpaper_for_workspace(ws)
-                                        mode = get_mode_for_workspace(ws)
+                                        settings = get_render_settings_for_workspace(ws)
                                         if wp:
-                                            apply_wallpaper(wp, mode)
+                                            apply_wallpaper(
+                                                wp,
+                                                settings["mode"],
+                                                ws,
+                                                settings["transition_type"],
+                                                settings["transition_duration"],
+                                                settings["shader_preset"],
+                                            )
                                         last_ws = ws
                             except json.JSONDecodeError:
                                 continue
@@ -544,9 +783,16 @@ def watch_workspace_sway():
                     if ws:
                         log(f"Sway workspace event: {ws}")
                         wp = get_wallpaper_for_workspace(ws)
-                        mode = get_mode_for_workspace(ws)
+                        settings = get_render_settings_for_workspace(ws)
                         if wp:
-                            apply_wallpaper(wp, mode)
+                            apply_wallpaper(
+                                wp,
+                                settings["mode"],
+                                ws,
+                                settings["transition_type"],
+                                settings["transition_duration"],
+                                settings["shader_preset"],
+                            )
                 except json.JSONDecodeError:
                     pass
             log("Sway subscription ended, reconnecting...")
@@ -591,8 +837,17 @@ class WallpaperHandler(BaseHTTPRequestHandler):
                 return
 
             wp = get_wallpaper_for_workspace(ws)
-            mode = get_mode_for_workspace(ws)
-            self.send_json({"workspace": ws, "path": wp, "mode": mode})
+            settings = get_render_settings_for_workspace(ws)
+            self.send_json(
+                {
+                    "workspace": ws,
+                    "path": wp,
+                    "mode": settings["mode"],
+                    "transition_type": settings["transition_type"],
+                    "transition_duration": settings["transition_duration"],
+                    "shader_preset": settings["shader_preset"],
+                }
+            )
 
         else:
             self.send_json({"error": "Not found"}, 404)
@@ -622,6 +877,14 @@ class WallpaperHandler(BaseHTTPRequestHandler):
 
         wp = data.get("path")
         mode = data.get("mode", "fill")
+        transition_type = data.get("transition_type", TRANSITION_TYPE)
+        transition_duration = data.get("transition_duration", TRANSITION_DURATION)
+        shader_preset = data.get("shader_preset", SHADER_PRESET)
+
+        try:
+            transition_duration = float(transition_duration)
+        except (TypeError, ValueError):
+            transition_duration = float(TRANSITION_DURATION)
 
         wm = detect_wm()
         current_ws = get_current_workspace(wm)
@@ -641,9 +904,14 @@ class WallpaperHandler(BaseHTTPRequestHandler):
                 conn.execute(f"INSERT INTO wallpapers(path) VALUES('{escaped}')")
                 wp_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-            conn.execute(
-                "INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES(?, ?, ?)",
-                (ws, wp_id, mode),
+            upsert_assignment(
+                conn,
+                ws,
+                wp_id,
+                mode,
+                transition_type,
+                transition_duration,
+                shader_preset,
             )
             conn.commit()
             conn.close()
@@ -651,24 +919,41 @@ class WallpaperHandler(BaseHTTPRequestHandler):
 
             # Apply if current workspace
             if ws == current_ws:
-                apply_wallpaper(wp, mode)
+                apply_wallpaper(
+                    wp,
+                    mode,
+                    ws,
+                    transition_type,
+                    transition_duration,
+                    shader_preset,
+                )
                 self.send_json({"ok": True, "applied": True, "workspace": ws})
             else:
                 self.send_json({"ok": True, "applied": False, "workspace": ws})
         else:
             # No path = apply from DB
             wp = get_wallpaper_for_workspace(ws)
-            mode = get_mode_for_workspace(ws)
+            settings = get_render_settings_for_workspace(ws)
 
             if wp:
-                apply_wallpaper(wp, mode)
+                apply_wallpaper(
+                    wp,
+                    settings["mode"],
+                    ws,
+                    settings["transition_type"],
+                    settings["transition_duration"],
+                    settings["shader_preset"],
+                )
                 self.send_json(
                     {
                         "ok": True,
                         "applied": True,
                         "workspace": ws,
                         "path": wp,
-                        "mode": mode,
+                        "mode": settings["mode"],
+                        "transition_type": settings["transition_type"],
+                        "transition_duration": settings["transition_duration"],
+                        "shader_preset": settings["shader_preset"],
                     }
                 )
             else:
@@ -700,10 +985,17 @@ def run_daemon():
     wm = detect_wm()
     ws = get_current_workspace(wm)
     wp = get_wallpaper_for_workspace(ws)
-    mode = get_mode_for_workspace(ws)
+    settings = get_render_settings_for_workspace(ws)
     log(f"Current workspace: {ws}, wallpaper: {wp}")
     if wp:
-        apply_wallpaper(wp, mode)
+        apply_wallpaper(
+            wp,
+            settings["mode"],
+            ws,
+            settings["transition_type"],
+            settings["transition_duration"],
+            settings["shader_preset"],
+        )
 
     # Start workspace watcher in background
     if wm == "hyprland":
@@ -730,7 +1022,12 @@ def main():
     parser = argparse.ArgumentParser(description="mados-wallpaperd")
     parser.add_argument("-d", "--daemon", action="store_true", help="Start as daemon")
     parser.add_argument(
-        "command", nargs="?", help="Command: list, get WS, set WS [PATH] [MODE]"
+        "command",
+        nargs="?",
+        help=(
+            "Command: list, get WS, set WS [PATH] [MODE] "
+            "[TRANSITION_TYPE] [TRANSITION_DURATION] [SHADER_PRESET]"
+        ),
     )
     parser.add_argument("args", nargs="*", help="Arguments for command")
 
@@ -773,8 +1070,19 @@ def main():
                     print(json.dumps({"error": "invalid workspace"}))
                 else:
                     wp = get_wallpaper_for_workspace(ws)
-                    mode = get_mode_for_workspace(ws)
-                    print(json.dumps({"workspace": ws, "path": wp, "mode": mode}))
+                    settings = get_render_settings_for_workspace(ws)
+                    print(
+                        json.dumps(
+                            {
+                                "workspace": ws,
+                                "path": wp,
+                                "mode": settings["mode"],
+                                "transition_type": settings["transition_type"],
+                                "transition_duration": settings["transition_duration"],
+                                "shader_preset": settings["shader_preset"],
+                            }
+                        )
+                    )
 
         elif args.command == "set":
             if not args.args:
@@ -787,6 +1095,19 @@ def main():
                 else:
                     wp = args.args[1] if len(args.args) > 1 else None
                     mode = args.args[2] if len(args.args) > 2 else "fill"
+                    transition_type = (
+                        args.args[3] if len(args.args) > 3 else TRANSITION_TYPE
+                    )
+                    transition_duration = (
+                        args.args[4] if len(args.args) > 4 else TRANSITION_DURATION
+                    )
+                    shader_preset = (
+                        args.args[5] if len(args.args) > 5 else SHADER_PRESET
+                    )
+                    try:
+                        transition_duration = float(transition_duration)
+                    except (TypeError, ValueError):
+                        transition_duration = float(TRANSITION_DURATION)
 
                     wm = detect_wm()
                     current_ws = get_current_workspace(wm)
@@ -806,15 +1127,27 @@ def main():
                             wp_id = conn.execute(
                                 "SELECT last_insert_rowid()"
                             ).fetchone()[0]
-                        conn.execute(
-                            "INSERT OR REPLACE INTO assignments(workspace, wallpaper_id, mode) VALUES(?, ?, ?)",
-                            (ws, wp_id, mode),
+                        upsert_assignment(
+                            conn,
+                            ws,
+                            wp_id,
+                            mode,
+                            transition_type,
+                            transition_duration,
+                            shader_preset,
                         )
                         conn.commit()
                         conn.close()
 
                         if ws == current_ws:
-                            apply_wallpaper(wp, mode)
+                            apply_wallpaper(
+                                wp,
+                                mode,
+                                ws,
+                                transition_type,
+                                transition_duration,
+                                shader_preset,
+                            )
                             print(
                                 json.dumps(
                                     {"ok": True, "applied": True, "workspace": ws}
@@ -829,9 +1162,16 @@ def main():
                     else:
                         # No path = apply from DB
                         wp = get_wallpaper_for_workspace(ws)
-                        mode = get_mode_for_workspace(ws)
+                        settings = get_render_settings_for_workspace(ws)
                         if wp:
-                            apply_wallpaper(wp, mode)
+                            apply_wallpaper(
+                                wp,
+                                settings["mode"],
+                                ws,
+                                settings["transition_type"],
+                                settings["transition_duration"],
+                                settings["shader_preset"],
+                            )
                             print(
                                 json.dumps(
                                     {"ok": True, "applied": True, "workspace": ws}
