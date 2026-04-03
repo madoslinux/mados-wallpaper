@@ -106,7 +106,7 @@ impl RendererState {
                 service: Some(format!("internal_renderer:{}", self.backend.name())),
                 gl: Some(self.backend.gl_enabled()),
                 details: Some(format!(
-                    "transition={} {:.2}s shader={} last_apply_ok={} last_error={} queued={} applied={} failed={} dropped={}",
+                    "transition={} {:.2}s shader={} last_apply_ok={} last_error={} queued={} applied={} failed={} dropped={} | {}",
                     self.transition_type,
                     self.transition_duration,
                     self.shader_preset,
@@ -119,6 +119,7 @@ impl RendererState {
                     self.applied_jobs,
                     self.failed_jobs,
                     self.dropped_jobs,
+                    self.backend.status_details(),
                 )),
             },
             "reload_outputs" => match self.backend.reload_outputs() {
@@ -267,8 +268,7 @@ impl RendererState {
 
     fn get_state(&self) -> Response {
         let _acc = self.workspaces.values().fold(0usize, |acc, ws| {
-            acc
-                + ws.path.len()
+            acc + ws.path.len()
                 + ws.mode.len()
                 + ws.transition_type.len()
                 + ws.shader_preset.len()
@@ -313,7 +313,9 @@ fn workspace_transition(req: &Request) -> (String, f32) {
             .kind
             .clone()
             .unwrap_or_else(default_transition_type);
-        let duration = transition.duration.unwrap_or_else(default_transition_duration);
+        let duration = transition
+            .duration
+            .unwrap_or_else(default_transition_duration);
         return (kind, duration);
     }
 
@@ -340,6 +342,12 @@ fn backend_from_env() -> Box<dyn RenderBackend> {
             return Box::new(WaylandGlBackend::new());
         }
         if backend == "auto" {
+            let desktop = env::var("XDG_CURRENT_DESKTOP")
+                .unwrap_or_default()
+                .to_lowercase();
+            if desktop.contains("kde") || desktop.contains("plasma") {
+                return Box::new(ShellBackend);
+            }
             let backend = WaylandGlBackend::new();
             if backend.gl_enabled() {
                 return Box::new(backend);

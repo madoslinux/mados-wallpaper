@@ -1,6 +1,9 @@
 pub trait RenderBackend {
     fn name(&self) -> &'static str;
     fn gl_enabled(&self) -> bool;
+    fn status_details(&self) -> String {
+        "ok".to_string()
+    }
     fn set_transition(&mut self, _kind: &str, _duration: f32) -> Result<(), String> {
         Ok(())
     }

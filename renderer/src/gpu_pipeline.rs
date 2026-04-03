@@ -50,14 +50,20 @@ struct EglFns {
     get_display: unsafe extern "C" fn(*mut c_void) -> EglDisplay,
     initialize: unsafe extern "C" fn(EglDisplay, *mut EglInt, *mut EglInt) -> EglBoolean,
     terminate: unsafe extern "C" fn(EglDisplay) -> EglBoolean,
-    choose_config:
-        unsafe extern "C" fn(EglDisplay, *const EglInt, *mut EglConfig, EglInt, *mut EglInt) -> EglBoolean,
+    choose_config: unsafe extern "C" fn(
+        EglDisplay,
+        *const EglInt,
+        *mut EglConfig,
+        EglInt,
+        *mut EglInt,
+    ) -> EglBoolean,
     bind_api: unsafe extern "C" fn(u32) -> EglBoolean,
     create_context:
         unsafe extern "C" fn(EglDisplay, EglConfig, EglContext, *const EglInt) -> EglContext,
     create_pbuffer_surface:
         unsafe extern "C" fn(EglDisplay, EglConfig, *const EglInt) -> EglSurface,
-    make_current: unsafe extern "C" fn(EglDisplay, EglSurface, EglSurface, EglContext) -> EglBoolean,
+    make_current:
+        unsafe extern "C" fn(EglDisplay, EglSurface, EglSurface, EglContext) -> EglBoolean,
     destroy_surface: unsafe extern "C" fn(EglDisplay, EglSurface) -> EglBoolean,
     destroy_context: unsafe extern "C" fn(EglDisplay, EglContext) -> EglBoolean,
     swap_buffers: unsafe extern "C" fn(EglDisplay, EglSurface) -> EglBoolean,
@@ -70,8 +76,7 @@ struct GlFns {
     gen_textures: unsafe extern "C" fn(i32, *mut u32),
     bind_texture: unsafe extern "C" fn(u32, u32),
     tex_parameteri: unsafe extern "C" fn(u32, i32, i32),
-    tex_image_2d:
-        unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
+    tex_image_2d: unsafe extern "C" fn(u32, i32, i32, i32, i32, i32, u32, u32, *const c_void),
     create_shader: unsafe extern "C" fn(u32) -> u32,
     shader_source: unsafe extern "C" fn(u32, i32, *const *const i8, *const i32),
     compile_shader: unsafe extern "C" fn(u32),
@@ -98,6 +103,8 @@ pub struct GpuPipeline {
     program: u32,
     transition: TransitionState,
     shader_preset: String,
+    last_error: Option<String>,
+    egl_version: Option<(i32, i32)>,
 }
 
 impl GpuPipeline {
@@ -119,6 +126,8 @@ impl GpuPipeline {
                 progress: 1.0,
             },
             shader_preset: "none".to_string(),
+            last_error: None,
+            egl_version: None,
         }
     }
 
@@ -144,6 +153,14 @@ impl GpuPipeline {
             (self.transition.progress + dt / self.transition.duration).clamp(0.0, 1.0);
     }
 
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    pub fn egl_version(&self) -> Option<(i32, i32)> {
+        self.egl_version
+    }
+
     pub fn try_initialize(&mut self) -> Result<(), String> {
         if self.initialized {
             return Ok(());
@@ -166,12 +183,14 @@ impl GpuPipeline {
         // SAFETY: valid pointers provided.
         let ok_init = unsafe { (egl_fns.initialize)(display, &mut major, &mut minor) };
         if ok_init == 0 {
+            self.last_error = Some("eglInitialize failed".to_string());
             return Err("eglInitialize failed".to_string());
         }
 
         // SAFETY: valid EGL display.
         let ok_bind = unsafe { (egl_fns.bind_api)(EGL_OPENGL_ES_API) };
         if ok_bind == 0 {
+            self.last_error = Some("eglBindAPI failed".to_string());
             return Err("eglBindAPI(EGL_OPENGL_ES_API) failed".to_string());
         }
 
@@ -192,29 +211,42 @@ impl GpuPipeline {
         let mut num_configs: EglInt = 0;
         // SAFETY: pointers valid for output.
         let ok_choose = unsafe {
-            (egl_fns.choose_config)(display, config_attribs.as_ptr(), &mut config, 1, &mut num_configs)
+            (egl_fns.choose_config)(
+                display,
+                config_attribs.as_ptr(),
+                &mut config,
+                1,
+                &mut num_configs,
+            )
         };
         if ok_choose == 0 || num_configs == 0 || config.is_null() {
+            self.last_error = Some("eglChooseConfig failed".to_string());
             return Err("eglChooseConfig failed".to_string());
         }
 
         let ctx_attribs = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
         // SAFETY: valid display/config and attrs.
-        let context = unsafe { (egl_fns.create_context)(display, config, std::ptr::null_mut(), ctx_attribs.as_ptr()) };
+        let context = unsafe {
+            (egl_fns.create_context)(display, config, std::ptr::null_mut(), ctx_attribs.as_ptr())
+        };
         if context.is_null() {
+            self.last_error = Some("eglCreateContext failed".to_string());
             return Err("eglCreateContext failed".to_string());
         }
 
         let surf_attribs = [EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE];
         // SAFETY: valid display/config and attrs.
-        let surface = unsafe { (egl_fns.create_pbuffer_surface)(display, config, surf_attribs.as_ptr()) };
+        let surface =
+            unsafe { (egl_fns.create_pbuffer_surface)(display, config, surf_attribs.as_ptr()) };
         if surface.is_null() {
+            self.last_error = Some("eglCreatePbufferSurface failed".to_string());
             return Err("eglCreatePbufferSurface failed".to_string());
         }
 
         // SAFETY: valid display/surface/context.
         let ok_current = unsafe { (egl_fns.make_current)(display, surface, surface, context) };
         if ok_current == 0 {
+            self.last_error = Some("eglMakeCurrent failed".to_string());
             return Err("eglMakeCurrent failed".to_string());
         }
 
@@ -246,6 +278,8 @@ impl GpuPipeline {
         self.surface = surface;
         self.texture = tex;
         self.program = program;
+        self.egl_version = Some((major, minor));
+        self.last_error = None;
         self.initialized = true;
         let _ = (major, minor);
         Ok(())
@@ -264,7 +298,10 @@ impl GpuPipeline {
             return Err("invalid frame byte size".to_string());
         }
 
-        let gl = self.gl_fns.as_ref().ok_or_else(|| "GL functions missing".to_string())?;
+        let gl = self
+            .gl_fns
+            .as_ref()
+            .ok_or_else(|| "GL functions missing".to_string())?;
         let egl = self
             .egl_fns
             .as_ref()
@@ -343,13 +380,20 @@ fn load_egl_fns(egl: &Library) -> Result<EglFns, String> {
     type EglGetDisplay = unsafe extern "C" fn(*mut c_void) -> EglDisplay;
     type EglInitialize = unsafe extern "C" fn(EglDisplay, *mut EglInt, *mut EglInt) -> EglBoolean;
     type EglTerminate = unsafe extern "C" fn(EglDisplay) -> EglBoolean;
-    type EglChooseConfig =
-        unsafe extern "C" fn(EglDisplay, *const EglInt, *mut EglConfig, EglInt, *mut EglInt) -> EglBoolean;
+    type EglChooseConfig = unsafe extern "C" fn(
+        EglDisplay,
+        *const EglInt,
+        *mut EglConfig,
+        EglInt,
+        *mut EglInt,
+    ) -> EglBoolean;
     type EglBindApi = unsafe extern "C" fn(u32) -> EglBoolean;
     type EglCreateContext =
         unsafe extern "C" fn(EglDisplay, EglConfig, EglContext, *const EglInt) -> EglContext;
-    type EglCreatePbufferSurface = unsafe extern "C" fn(EglDisplay, EglConfig, *const EglInt) -> EglSurface;
-    type EglMakeCurrent = unsafe extern "C" fn(EglDisplay, EglSurface, EglSurface, EglContext) -> EglBoolean;
+    type EglCreatePbufferSurface =
+        unsafe extern "C" fn(EglDisplay, EglConfig, *const EglInt) -> EglSurface;
+    type EglMakeCurrent =
+        unsafe extern "C" fn(EglDisplay, EglSurface, EglSurface, EglContext) -> EglBoolean;
     type EglDestroySurface = unsafe extern "C" fn(EglDisplay, EglSurface) -> EglBoolean;
     type EglDestroyContext = unsafe extern "C" fn(EglDisplay, EglContext) -> EglBoolean;
     type EglSwapBuffers = unsafe extern "C" fn(EglDisplay, EglSurface) -> EglBoolean;
@@ -522,5 +566,6 @@ fn link_program(gl: &GlFns, vs: u32, fs: u32) -> Result<u32, String> {
     Ok(program)
 }
 
-const VERT_SRC: &str = "#version 100\nattribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos,0.0,1.0); }";
+const VERT_SRC: &str =
+    "#version 100\nattribute vec2 a_pos; void main(){ gl_Position = vec4(a_pos,0.0,1.0); }";
 const FRAG_SRC: &str = "#version 100\nprecision mediump float; uniform float u_progress; void main(){ gl_FragColor = vec4(vec3(u_progress),1.0); }";

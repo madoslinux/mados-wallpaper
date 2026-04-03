@@ -339,15 +339,34 @@ def detect_wm():
         return "sway"
     elif "hypr" in desktop:
         return "hyprland"
+    elif "kde" in desktop or "plasma" in desktop:
+        return "kde"
+
+    if os.environ.get("KDE_FULL_SESSION", "").lower() in ("1", "true"):
+        return "kde"
+
     # Fallback checks
     try:
-        subprocess.run(["swaymsg"], capture_output=True, timeout=2)
-        return "sway"
+        result = subprocess.run(["swaymsg"], capture_output=True, timeout=2)
+        if result.returncode == 0:
+            return "sway"
     except Exception:
         pass
     try:
-        subprocess.run(["hyprctl"], capture_output=True, timeout=2)
-        return "hyprland"
+        result = subprocess.run(["hyprctl"], capture_output=True, timeout=2)
+        if result.returncode == 0:
+            return "hyprland"
+    except Exception:
+        pass
+    try:
+        result = subprocess.run(
+            ["qdbus6", "org.kde.KWin", "/KWin", "org.kde.KWin.currentDesktop"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            return "kde"
     except Exception:
         pass
     return "unknown"
@@ -475,6 +494,17 @@ def get_current_workspace(wm):
                     ws_index = parse_workspace_index(ws.get("idx"))
                     if ws_index is not None:
                         return ws_index
+        elif wm == "kde":
+            result = subprocess.run(
+                ["qdbus6", "org.kde.KWin", "/KWin", "org.kde.KWin.currentDesktop"],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                ws_index = parse_workspace_index(result.stdout.strip())
+                if ws_index is not None:
+                    return ws_index
     except Exception as e:
         log(f"Error getting workspace: {e}")
     return 1
@@ -802,6 +832,31 @@ def watch_workspace_sway():
         time.sleep(1)
 
 
+def watch_workspace_kde():
+    log("Starting KDE workspace watcher")
+    last_ws = None
+    while True:
+        try:
+            ws = get_current_workspace("kde")
+            if ws != last_ws:
+                log(f"KDE workspace changed: {last_ws} -> {ws}")
+                wp = get_wallpaper_for_workspace(ws)
+                settings = get_render_settings_for_workspace(ws)
+                if wp:
+                    apply_wallpaper(
+                        wp,
+                        settings["mode"],
+                        ws,
+                        settings["transition_type"],
+                        settings["transition_duration"],
+                        settings["shader_preset"],
+                    )
+                last_ws = ws
+        except Exception as e:
+            log(f"KDE watcher error: {e}")
+        time.sleep(1)
+
+
 class WallpaperHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress HTTP logging
@@ -1004,6 +1059,8 @@ def run_daemon():
         threading.Thread(target=watch_workspace_sway, daemon=True).start()
     elif wm == "niri":
         threading.Thread(target=watch_workspace_niri, daemon=True).start()
+    elif wm == "kde":
+        threading.Thread(target=watch_workspace_kde, daemon=True).start()
 
     # Save PID
     os.makedirs(DATA_DIR, exist_ok=True)

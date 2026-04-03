@@ -76,6 +76,9 @@ Renderer backend selection:
 - `MADOS_RENDERER_BACKEND=wayland_gl`
 - `MADOS_RENDERER_BACKEND=shell`
 
+KDE/KWin note:
+- In `auto` mode on KDE/Plasma sessions, renderer defaults to `shell` backend for reliable wallpaper apply via Plasma DBus (`qdbus6`/`qdbus`).
+
 Current `wayland_gl` status:
 - Initializes Wayland connection and tracks outputs + layer-shell availability.
 - Maintains per-output surface slots and wallpaper request state.
@@ -93,6 +96,7 @@ Current `wayland_gl` status:
 - Transition frame pacing now uses Wayland frame callbacks instead of fixed sleeps; control/status responses include runtime details (`health`, `get_state`).
 - Runtime status includes last async apply result and error cause for easier debugging from IPC clients.
 - Runtime counters exposed in status details: queued/applied/failed/dropped async jobs.
+- Health details now include backend diagnostics (Wayland/layer-shell/output counts, EGL version, GPU/runtime errors) to troubleshoot KDE/KWin environments.
 
 Known remaining limitation:
 - Final on-screen presentation still uses `wl_shm` buffers; GPU pipeline currently runs in parallel (EGL pbuffer path) and is not yet the direct presenter to `wl_surface`.

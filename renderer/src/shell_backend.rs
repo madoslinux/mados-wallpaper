@@ -14,6 +14,10 @@ impl RenderBackend for ShellBackend {
         false
     }
 
+    fn status_details(&self) -> String {
+        "backend=shell reason=explicit_or_auto_fallback".to_string()
+    }
+
     fn apply_wallpaper(&mut self, path: &str, mode: &str) -> Result<(), String> {
         apply_wallpaper_shell(path, mode)
     }
@@ -28,6 +32,9 @@ fn detect_wm() -> String {
     }
     if desktop.contains("hypr") {
         return "hyprland".to_string();
+    }
+    if desktop.contains("kde") || desktop.contains("plasma") {
+        return "kde".to_string();
     }
     "unknown".to_string()
 }
@@ -59,5 +66,39 @@ fn apply_wallpaper_shell(path: &str, mode: &str) -> Result<(), String> {
         return Err(format!("hyprctl failed: {stderr}"));
     }
 
+    if wm == "kde" {
+        return apply_wallpaper_kde(path);
+    }
+
     Err("unsupported compositor".to_string())
+}
+
+fn apply_wallpaper_kde(path: &str) -> Result<(), String> {
+    let escaped_path = path.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "var ds = desktops(); for (var i = 0; i < ds.length; i++) {{ var d = ds[i]; d.wallpaperPlugin = \"org.kde.image\"; d.currentConfigGroup = [\"Wallpaper\", \"org.kde.image\", \"General\"]; d.writeConfig(\"Image\", \"file://{}\"); }}",
+        escaped_path
+    );
+
+    let commands = ["qdbus6", "qdbus"];
+    for command in commands {
+        let output = Command::new(command)
+            .args([
+                "org.kde.plasmashell",
+                "/PlasmaShell",
+                "org.kde.PlasmaShell.evaluateScript",
+                &script,
+            ])
+            .output();
+
+        let Ok(output) = output else {
+            continue;
+        };
+
+        if output.status.success() {
+            return Ok(());
+        }
+    }
+
+    Err("failed to set KDE wallpaper via qdbus/qdbus6".to_string())
 }

@@ -1,11 +1,11 @@
 #[cfg(feature = "wayland_gl")]
 use wayland_client::globals::{registry_queue_init, Global, GlobalList, GlobalListContents};
 #[cfg(feature = "wayland_gl")]
-use wayland_client::protocol::wl_compositor;
-#[cfg(feature = "wayland_gl")]
 use wayland_client::protocol::wl_buffer;
 #[cfg(feature = "wayland_gl")]
 use wayland_client::protocol::wl_callback;
+#[cfg(feature = "wayland_gl")]
+use wayland_client::protocol::wl_compositor;
 #[cfg(feature = "wayland_gl")]
 use wayland_client::protocol::wl_output;
 #[cfg(feature = "wayland_gl")]
@@ -281,6 +281,7 @@ pub struct WaylandGlBackend {
     layer_shell_handle: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     #[cfg(feature = "wayland_gl")]
     state: WaylandState,
+    last_runtime_error: Option<String>,
 }
 
 #[cfg_attr(not(feature = "wayland_gl"), allow(dead_code))]
@@ -305,6 +306,7 @@ impl WaylandGlBackend {
                 shm: None,
                 layer_shell_handle: None,
                 state: WaylandState::default(),
+                last_runtime_error: None,
             };
             let _ = backend.gpu.try_initialize();
             let _ = backend.initialize();
@@ -323,15 +325,17 @@ impl WaylandGlBackend {
                 transition_duration: 2.0,
                 shader_preset: "none".to_string(),
                 gpu: GpuPipeline::new(),
+                last_runtime_error: None,
             }
         }
     }
 
     #[cfg(feature = "wayland_gl")]
     fn initialize(&mut self) -> Result<(), String> {
-        let conn = Connection::connect_to_env().map_err(|e| format!("wayland connect failed: {e}"))?;
-        let (globals, mut queue) =
-            registry_queue_init::<WaylandState>(&conn).map_err(|e| format!("registry init failed: {e}"))?;
+        let conn =
+            Connection::connect_to_env().map_err(|e| format!("wayland connect failed: {e}"))?;
+        let (globals, mut queue) = registry_queue_init::<WaylandState>(&conn)
+            .map_err(|e| format!("registry init failed: {e}"))?;
         let qh = queue.handle();
 
         let compositor = globals
@@ -448,20 +452,20 @@ impl WaylandGlBackend {
         #[cfg(feature = "wayland_gl")]
         {
             for output_name in &self.state.outputs {
-                let current = self
-                    .surfaces
-                    .get(output_name)
-                    .cloned()
-                    .unwrap_or(OutputSurfaceState {
-                        output_name: *output_name,
-                        has_layer_surface: false,
-                        output: None,
-                        surface: None,
-                        layer_surface: None,
-                        buffer: None,
-                        last_rgba: None,
-                        last_size: None,
-                    });
+                let current =
+                    self.surfaces
+                        .get(output_name)
+                        .cloned()
+                        .unwrap_or(OutputSurfaceState {
+                            output_name: *output_name,
+                            has_layer_surface: false,
+                            output: None,
+                            surface: None,
+                            layer_surface: None,
+                            buffer: None,
+                            last_rgba: None,
+                            last_size: None,
+                        });
                 fresh.insert(*output_name, current);
             }
         }
@@ -496,7 +500,6 @@ impl WaylandGlBackend {
         }
         Ok(())
     }
-
 }
 
 #[cfg(feature = "wayland_gl")]
@@ -786,6 +789,33 @@ impl RenderBackend for WaylandGlBackend {
         self.connected && self.layer_shell && self.output_count > 0 && self.gpu.is_initialized()
     }
 
+    fn status_details(&self) -> String {
+        let egl = self
+            .gpu
+            .egl_version()
+            .map(|(a, b)| format!("{a}.{b}"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let gpu_error = self
+            .gpu
+            .last_error()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let rt_error = self
+            .last_runtime_error
+            .clone()
+            .unwrap_or_else(|| "none".to_string());
+        format!(
+            "backend=wayland_gl connected={} layer_shell={} outputs={} gl={} egl={} gpu_error={} runtime_error={}",
+            self.connected,
+            self.layer_shell,
+            self.output_count,
+            self.gl_enabled(),
+            egl,
+            gpu_error,
+            rt_error
+        )
+    }
+
     fn set_transition(&mut self, kind: &str, duration: f32) -> Result<(), String> {
         self.transition_type = kind.to_string();
         self.transition_duration = duration.max(0.01);
@@ -803,7 +833,13 @@ impl RenderBackend for WaylandGlBackend {
     fn reload_outputs(&mut self) -> Result<(), String> {
         #[cfg(feature = "wayland_gl")]
         {
-            return self.refresh_registry();
+            let res = self.refresh_registry();
+            if let Err(err) = &res {
+                self.last_runtime_error = Some(err.clone());
+            } else {
+                self.last_runtime_error = None;
+            }
+            return res;
         }
 
         #[cfg(not(feature = "wayland_gl"))]
@@ -828,6 +864,7 @@ impl RenderBackend for WaylandGlBackend {
             shader_preset: self.shader_preset.clone(),
         });
 
+        #[cfg(feature = "wayland_gl")]
         for surface in self.surfaces.values_mut() {
             surface.has_layer_surface = surface.layer_surface.is_some();
         }
@@ -889,10 +926,9 @@ impl RenderBackend for WaylandGlBackend {
                                     };
                                     make_buffer_from_rgba_with_shm(shm, &frame, width, height, &qh)
                                         .or_else(|_| {
-                                            make_image_buffer_with_shm(shm, path, width, height, &qh)
-                                        })
-                                        .or_else(|_| {
-                                            make_solid_buffer_with_shm(shm, width, height, &qh)
+                                            make_image_buffer_with_shm(
+                                                shm, path, width, height, &qh,
+                                            )
                                         })?
                                 };
                                 surface.attach(Some(&buffer), 0, 0);
@@ -909,9 +945,9 @@ impl RenderBackend for WaylandGlBackend {
                             let Some(shm) = self.shm.as_ref() else {
                                 return Err("wl_shm not initialized".to_string());
                             };
-                            make_buffer_from_rgba_with_shm(shm, &rgba, width, height, &qh)
-                                .or_else(|_| make_image_buffer_with_shm(shm, path, width, height, &qh))
-                                .or_else(|_| make_solid_buffer_with_shm(shm, width, height, &qh))?
+                            make_buffer_from_rgba_with_shm(shm, &rgba, width, height, &qh).or_else(
+                                |_| make_image_buffer_with_shm(shm, path, width, height, &qh),
+                            )?
                         };
                         surface.attach(Some(&buffer), 0, 0);
                         surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
@@ -942,6 +978,7 @@ impl RenderBackend for WaylandGlBackend {
             let _ = surface.output_name;
         }
 
+        self.last_runtime_error = None;
         Ok(())
     }
 }
