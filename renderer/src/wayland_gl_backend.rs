@@ -785,6 +785,10 @@ impl RenderBackend for WaylandGlBackend {
         "wayland_gl"
     }
 
+    fn can_render(&self) -> bool {
+        self.connected && self.layer_shell && self.output_count > 0
+    }
+
     fn gl_enabled(&self) -> bool {
         self.connected && self.layer_shell && self.output_count > 0 && self.gpu.is_initialized()
     }

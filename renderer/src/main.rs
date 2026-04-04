@@ -339,7 +339,11 @@ fn backend_from_env() -> Box<dyn RenderBackend> {
     #[cfg(feature = "wayland_gl")]
     {
         if backend == "wayland_gl" {
-            return Box::new(WaylandGlBackend::new());
+            let gl = WaylandGlBackend::new();
+            if gl.can_render() {
+                return Box::new(gl);
+            }
+            return Box::new(ShellBackend);
         }
         if backend == "auto" {
             let desktop = env::var("XDG_CURRENT_DESKTOP")
@@ -348,9 +352,9 @@ fn backend_from_env() -> Box<dyn RenderBackend> {
             if desktop.contains("kde") || desktop.contains("plasma") {
                 return Box::new(ShellBackend);
             }
-            let backend = WaylandGlBackend::new();
-            if backend.gl_enabled() {
-                return Box::new(backend);
+            let gl = WaylandGlBackend::new();
+            if gl.can_render() {
+                return Box::new(gl);
             }
         }
     }
